@@ -313,19 +313,29 @@ async def process_keyword(page, keyword, worksheet):
     # 2) 각 상위 게시물 분석
     results_for_sheet = [today, keyword]
     should_record = False  # 기록 필요 여부
+    seen_urls = set()  # 중복 링크 감지용
 
     for sr in search_results:
         rank_label = f"{sr['rank']}위 게시물"
+        url = sr["url"]
+
+        # ─── 중복 링크 체크 ───
+        if url in seen_urls:
+            results_for_sheet.extend(["중복", url])
+            logger.info(f"[{rank_label}] 중복 링크 — 스킵: {url}")
+            continue
+        seen_urls.add(url)
+
         await random_delay()
 
         try:
-            rank_info = await check_answerer_rank(page, sr["url"], TARGET_ANSWERER)
+            rank_info = await check_answerer_rank(page, url, TARGET_ANSWERER)
 
             if rank_info["is_top1"]:
                 # 타겟이 1위 → 기록 항목에 "1위(스킵)" 표시
                 results_for_sheet.extend([
                     f"1위 ('{TARGET_ANSWERER}' 최상단)",
-                    sr["url"],
+                    url,
                 ])
                 logger.info(
                     f"[{rank_label}] '{TARGET_ANSWERER}'이(가) 1위 — 스킵"
@@ -336,16 +346,16 @@ async def process_keyword(page, keyword, worksheet):
                     rank_text = f"{rank_info['rank']}위 (1위: {rank_info['top1_answerer']})"
                 else:
                     rank_text = f"순위권 밖 (1위: {rank_info['top1_answerer']}, 총 {rank_info['total_answers']}개 답변)"
-                results_for_sheet.extend([rank_text, sr["url"]])
+                results_for_sheet.extend([rank_text, url])
                 logger.info(f"[{rank_label}] '{TARGET_ANSWERER}' → {rank_text}")
 
         except PlaywrightTimeout:
-            logger.error(f"[{rank_label}] 페이지 로드 타임아웃: {sr['url']}")
-            results_for_sheet.extend(["타임아웃", sr["url"]])
+            logger.error(f"[{rank_label}] 페이지 로드 타임아웃: {url}")
+            results_for_sheet.extend(["타임아웃", url])
             should_record = True
         except Exception as e:
             logger.error(f"[{rank_label}] 분석 실패: {e}")
-            results_for_sheet.extend([f"오류: {str(e)[:30]}", sr["url"]])
+            results_for_sheet.extend([f"오류: {str(e)[:30]}", url])
             should_record = True
 
     # 부족한 결과 패딩 (TOP_N_RESULTS보다 적을 경우)
