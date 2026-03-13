@@ -16,10 +16,12 @@ KEYWORDS_COLUMN = "A"   # 키워드 열
 KEYWORDS_START_ROW = 4  # 키워드 시작 행 (1~3행은 헤더/제목)
 
 # 결과 쓰기 열 (기존 행을 업데이트, 새 행 추가 안 함)
-RANK_COL_1 = "B"   # 1위 게시물 현재 순위
-LINK_COL_1 = "C"   # 1위 게시물 답변 링크
-RANK_COL_2 = "I"   # 2위 게시물 현재 순위
-LINK_COL_2 = "J"   # 2위 게시물 답변 링크
+RANK_COL_1  = "B"  # 1위 게시물 현재 순위
+LINK_COL_1  = "C"  # 1위 게시물 답변 링크
+LIKES_COL_1 = "E"  # 1위 게시물 현재 따봉 갯수
+RANK_COL_2  = "I"  # 2위 게시물 현재 순위
+LINK_COL_2  = "J"  # 2위 게시물 답변 링크
+LIKES_COL_2 = "L"  # 2위 게시물 현재 따봉 갯수
 
 # ─── 검색 설정 ───
 TOP_N_RESULTS = 2  # 검색 결과에서 확인할 상위 게시물 수 (1위, 2위)

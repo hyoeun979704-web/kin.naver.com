@@ -31,8 +31,10 @@ from config import (
     KEYWORDS_START_ROW,
     RANK_COL_1,
     LINK_COL_1,
+    LIKES_COL_1,
     RANK_COL_2,
     LINK_COL_2,
+    LIKES_COL_2,
     KEYWORDS,
 )
 
@@ -114,17 +116,18 @@ def flush_to_sheet(worksheet, all_results):
         results = entry["results"]  # 최대 2개: [1위 게시물, 2위 게시물]
 
         col_pairs = [
-            (RANK_COL_1, LINK_COL_1),
-            (RANK_COL_2, LINK_COL_2),
+            (RANK_COL_1, LINK_COL_1, LIKES_COL_1),
+            (RANK_COL_2, LINK_COL_2, LIKES_COL_2),
         ]
 
-        for idx, (rank_col, link_col) in enumerate(col_pairs):
+        for idx, (rank_col, link_col, likes_col) in enumerate(col_pairs):
             if idx >= len(results):
                 break
 
             item = results[idx]
             url = item["url"]
             rank_text = item["rank_text"]
+            likes = item["likes"]
 
             # 중복 URL 처리
             if url and url in seen_urls:
@@ -136,6 +139,8 @@ def flush_to_sheet(worksheet, all_results):
 
             updates.append({"range": f"{rank_col}{row}", "values": [[rank_text]]})
             updates.append({"range": f"{link_col}{row}", "values": [[url]]})
+            if likes is not None:
+                updates.append({"range": f"{likes_col}{row}", "values": [[likes]]})
 
     if updates:
         worksheet.batch_update(updates, value_input_option="USER_ENTERED")
@@ -233,6 +238,7 @@ async def check_answerer_rank(page, question_url, target_name):
             "is_top1": bool,
             "total_answers": int,
             "top1_answerer": str,
+            "target_likes": int or None,  # 타겟 답변자의 따봉 갯수
         }
     """
     logger.info(f"질문 페이지 접속: {question_url}")
@@ -276,9 +282,11 @@ async def check_answerer_rank(page, question_url, target_name):
             ".answer_component"
         )
 
-    answerer_list = []
+    # 답변자별 (이름, 따봉수) 수집
+    answerer_data = []  # [(name, likes), ...]
     for item in answer_items:
         try:
+            # 답변자 이름
             name_el = await item.query_selector(
                 ".answer_nickname, "
                 ".c-userinfo__name, "
@@ -288,28 +296,54 @@ async def check_answerer_rank(page, question_url, target_name):
                 ".user_info .name, "
                 "a[class*='user']"
             )
-            if name_el:
-                name = (await name_el.inner_text()).strip()
-                if name:
-                    answerer_list.append(name)
+            if not name_el:
+                continue
+            name = (await name_el.inner_text()).strip()
+            if not name:
+                continue
+
+            # 따봉(추천) 갯수 — 여러 셀렉터 시도
+            likes = None
+            for sel in [
+                ".answer_sympathy .u_cnt_num",
+                ".u_cnt_num",
+                "[class*='sympathy'] [class*='count']",
+                "[class*='sympathy'] [class*='num']",
+                "[class*='recommend'] [class*='count']",
+                "[class*='recommend'] [class*='num']",
+                ".c-heading-answer__sympathy .count",
+                ".btn_sympathy .count",
+                "[class*='likeCount']",
+                "[class*='like_count']",
+            ]:
+                likes_el = await item.query_selector(sel)
+                if likes_el:
+                    likes_text = (await likes_el.inner_text()).strip().replace(",", "")
+                    if likes_text.isdigit():
+                        likes = int(likes_text)
+                        break
+
+            answerer_data.append((name, likes))
         except Exception:
             continue
 
-    # 중복 제거 (순서 유지)
+    # 중복 이름 제거 (순서 유지, 첫 등장 기준)
     seen = set()
-    unique_answerers = []
-    for name in answerer_list:
+    unique_data = []
+    for name, likes in answerer_data:
         if name not in seen:
             seen.add(name)
-            unique_answerers.append(name)
+            unique_data.append((name, likes))
 
-    total = len(unique_answerers)
-    top1 = unique_answerers[0] if unique_answerers else "확인불가"
+    total = len(unique_data)
+    top1 = unique_data[0][0] if unique_data else "확인불가"
 
     target_rank = None
-    for idx, name in enumerate(unique_answerers):
+    target_likes = None
+    for idx, (name, likes) in enumerate(unique_data):
         if target_name in name:
             target_rank = idx + 1
+            target_likes = likes
             break
 
     result = {
@@ -317,12 +351,14 @@ async def check_answerer_rank(page, question_url, target_name):
         "is_top1": target_rank == 1,
         "total_answers": total,
         "top1_answerer": top1,
+        "target_likes": target_likes,
     }
 
     logger.info(
-        f"답변 분석 완료 - 총 {total}개 답변, "
+        f"답변 분석 완료 - 총 {total}개, "
         f"1위: {top1}, "
-        f"'{target_name}' 순위: {target_rank or '없음'}"
+        f"'{target_name}' 순위: {target_rank or '없음'}, "
+        f"따봉: {target_likes if target_likes is not None else '없음'}"
     )
     return result
 
@@ -350,8 +386,8 @@ async def process_keyword(page, row_number, keyword):
             "row": row_number,
             "keyword": keyword,
             "results": [
-                {"rank_text": "검색결과없음", "url": ""},
-                {"rank_text": "검색결과없음", "url": ""},
+                {"rank_text": "검색결과없음", "url": "", "likes": None},
+                {"rank_text": "검색결과없음", "url": "", "likes": None},
             ],
         }
 
@@ -375,18 +411,22 @@ async def process_keyword(page, row_number, keyword):
                     rank_text = f"없음(1위:{rank_info['top1_answerer']})"
                 logger.info(f"[{rank_label}] '{TARGET_ANSWERER}' → {rank_text}위")
 
+            likes = rank_info["target_likes"]
+
         except PlaywrightTimeout:
             logger.error(f"[{rank_label}] 타임아웃: {url}")
             rank_text = "타임아웃"
+            likes = None
         except Exception as e:
             logger.error(f"[{rank_label}] 오류: {e}")
-            rank_text = f"오류"
+            rank_text = "오류"
+            likes = None
 
-        result_items.append({"rank_text": rank_text, "url": url})
+        result_items.append({"rank_text": rank_text, "url": url, "likes": likes})
 
     # 결과가 TOP_N_RESULTS보다 적을 경우 패딩
     while len(result_items) < TOP_N_RESULTS:
-        result_items.append({"rank_text": "", "url": ""})
+        result_items.append({"rank_text": "", "url": "", "likes": None})
 
     return {
         "row": row_number,
