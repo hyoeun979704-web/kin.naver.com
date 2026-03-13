@@ -317,10 +317,11 @@ async def check_answerer_rank(page, question_url, target_name):
             # 따봉(추천) 갯수 — 여러 셀렉터 시도
             likes = None
             for sel in [
+                ".countWrap ._count",
+                "span._count_rollup_now",
+                "span._count",
                 ".u_cnt_num",
                 "[class*='sympathy'] [class*='count']",
-                "[class*='sympathy'] [class*='num']",
-                "[class*='recommend'] [class*='count']",
                 "[class*='like'] [class*='count']",
                 ".btn_sympathy .count",
             ]:
