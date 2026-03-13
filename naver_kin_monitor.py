@@ -250,6 +250,7 @@ async def check_answerer_rank(page, question_url, target_name):
     while True:
         try:
             more_btn = await page.query_selector(
+                "button.endAnswerMoreButton, #nextPageButton, "
                 "a.answer_more, button.answer_more, "
                 "[class*='more_answer'], a._moreBtn"
             )
@@ -268,53 +269,60 @@ async def check_answerer_rank(page, question_url, target_name):
         logger.info(f"'더보기' 버튼 {more_clicked}회 클릭")
 
     # ─── 답변 목록 파싱 ───
-    answer_items = await page.query_selector_all(
-        ".answer-content__list > li, "
-        "div.answer_area, "
-        "[class*='answerArea'], "
-        ".c-heading-answer__content, "
-        "div[class*='answer']"
-    )
+    answer_items = await page.query_selector_all("div._contentBox")
 
     if not answer_items:
         answer_items = await page.query_selector_all(
-            "#answerArea div.se_component_wrap, "
-            ".answer_component"
+            "div.contentBox, "
+            ".answer-content__list > li, "
+            "div.answer_area"
         )
 
     # 답변자별 (이름, 따봉수) 수집
     answerer_data = []  # [(name, likes), ...]
     for item in answer_items:
         try:
-            # 답변자 이름
-            name_el = await item.query_selector(
-                ".answer_nickname, "
-                ".c-userinfo__name, "
-                "[class*='nickname'], "
-                "[class*='userName'], "
-                ".profile_info a, "
-                ".user_info .name, "
-                "a[class*='user']"
-            )
-            if not name_el:
-                continue
-            name = (await name_el.inner_text()).strip()
+            # 답변자 이름 — career_list span에서 해시태그 파싱
+            name = None
+
+            # 방법1: career_list span에서 "#닉네임" 추출
+            career_el = await item.query_selector(".career_list span")
+            if career_el:
+                career_text = (await career_el.inner_text()).strip()
+                # "#16600240 #입주청소 #새집느낌" → 마지막 해시태그가 닉네임
+                parts = [p.strip() for p in career_text.split("#") if p.strip()]
+                if parts:
+                    name = parts[-1]
+
+            # 방법2: card_info 내 닉네임 요소
+            if not name:
+                for sel in [
+                    ".card_info .nickname",
+                    ".card_info .name",
+                    ".nick",
+                    ".name_area .name",
+                    ".profileCard .nickname",
+                    "[class*='nickname']",
+                    "[class*='userName']",
+                ]:
+                    name_el = await item.query_selector(sel)
+                    if name_el:
+                        name = (await name_el.inner_text()).strip()
+                        if name:
+                            break
+
             if not name:
                 continue
 
             # 따봉(추천) 갯수 — 여러 셀렉터 시도
             likes = None
             for sel in [
-                ".answer_sympathy .u_cnt_num",
                 ".u_cnt_num",
                 "[class*='sympathy'] [class*='count']",
                 "[class*='sympathy'] [class*='num']",
                 "[class*='recommend'] [class*='count']",
-                "[class*='recommend'] [class*='num']",
-                ".c-heading-answer__sympathy .count",
+                "[class*='like'] [class*='count']",
                 ".btn_sympathy .count",
-                "[class*='likeCount']",
-                "[class*='like_count']",
             ]:
                 likes_el = await item.query_selector(sel)
                 if likes_el:
@@ -324,6 +332,7 @@ async def check_answerer_rank(page, question_url, target_name):
                         break
 
             answerer_data.append((name, likes))
+            logger.debug(f"  답변자 발견: {name}, 따봉: {likes}")
         except Exception:
             continue
 
