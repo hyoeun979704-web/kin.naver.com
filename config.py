@@ -8,7 +8,7 @@ TARGET_ANSWERER = "새집느낌"
 # ─── 구글 시트 설정 ───
 GOOGLE_SHEETS_CREDENTIALS_FILE = "credentials.json"  # 서비스 계정 JSON 키 파일 경로
 SPREADSHEET_NAME = "네이버 지식인 모니터링"  # 구글 시트 이름 (또는 SPREADSHEET_KEY 사용)
-SPREADSHEET_KEY = ""  # 구글 시트 URL에서 /d/ 뒤의 키 (비워두면 이름으로 검색)
+SPREADSHEET_KEY = "1dv40s8cfKBzSlw42-Ax74BdnVOXz_XN3iwIZK44R-8Q"  # 구글 시트 URL에서 /d/ 뒤의 키
 WORKSHEET_NAME = "Sheet1"  # 워크시트(탭) 이름
 
 # ─── 검색 설정 ───
