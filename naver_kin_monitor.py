@@ -8,6 +8,7 @@
 import asyncio
 import random
 import logging
+import re
 import sys
 from urllib.parse import quote_plus
 
@@ -105,11 +106,16 @@ def flush_to_sheet(worksheet, all_results):
       I(RANK_COL_2): 2위 게시물 현재 순위
       J(LINK_COL_2): 2위 게시물 답변 링크
     """
-    seen_urls = set()
+    seen_doc_ids = set()
     duplicate_count = 0
 
     # gspread batch_update 형식: [{"range": "B4", "values": [["값"]]}, ...]
     updates = []
+
+    def extract_doc_id(url):
+        """URL에서 docId를 추출합니다."""
+        match = re.search(r'docId=(\d+)', url)
+        return match.group(1) if match else url
 
     for entry in all_results:
         row = entry["row"]
@@ -129,13 +135,14 @@ def flush_to_sheet(worksheet, all_results):
             rank_text = item["rank_text"]
             likes = item["likes"]
 
-            # 중복 URL 처리
-            if url and url in seen_urls:
+            # 중복 링크 처리 (docId 기준)
+            doc_id = extract_doc_id(url) if url else None
+            if doc_id and doc_id in seen_doc_ids:
                 rank_text = "중복"
                 duplicate_count += 1
-                logger.info(f"[중복 감지] '{entry['keyword']}' {idx+1}위 게시물 — {url}")
-            elif url:
-                seen_urls.add(url)
+                logger.info(f"[중복 감지] '{entry['keyword']}' {idx+1}위 게시물 — docId={doc_id}")
+            elif doc_id:
+                seen_doc_ids.add(doc_id)
 
             updates.append({"range": f"{rank_col}{row}", "values": [[rank_text]]})
             updates.append({"range": f"{link_col}{row}", "values": [[url]]})
