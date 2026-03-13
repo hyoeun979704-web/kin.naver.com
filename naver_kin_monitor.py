@@ -9,7 +9,6 @@ import asyncio
 import random
 import logging
 import sys
-from datetime import datetime
 from urllib.parse import quote_plus
 
 import gspread
@@ -19,9 +18,8 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 from config import (
     TARGET_ANSWERER,
     GOOGLE_SHEETS_CREDENTIALS_FILE,
-    SPREADSHEET_NAME,
     SPREADSHEET_KEY,
-    WORKSHEET_NAME,
+    WORKSHEET_INDEX,
     TOP_N_RESULTS,
     MIN_DELAY,
     MAX_DELAY,
@@ -31,6 +29,10 @@ from config import (
     USE_SHEET_KEYWORDS,
     KEYWORDS_COLUMN,
     KEYWORDS_START_ROW,
+    RANK_COL_1,
+    LINK_COL_1,
+    RANK_COL_2,
+    LINK_COL_2,
     KEYWORDS,
 )
 
@@ -56,46 +58,92 @@ SCOPES = [
 ]
 
 
+def col_letter_to_index(letter):
+    """열 문자를 1-based 인덱스로 변환 (A→1, B→2, ...)"""
+    return ord(letter.upper()) - ord("A") + 1
+
+
 def get_google_sheet():
     """구글 시트 워크시트 객체를 반환합니다."""
     creds = Credentials.from_service_account_file(
         GOOGLE_SHEETS_CREDENTIALS_FILE, scopes=SCOPES
     )
     client = gspread.authorize(creds)
-
-    if SPREADSHEET_KEY:
-        spreadsheet = client.open_by_key(SPREADSHEET_KEY)
-    else:
-        spreadsheet = client.open(SPREADSHEET_NAME)
-
-    worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
+    spreadsheet = client.open_by_key(SPREADSHEET_KEY)
+    worksheet = spreadsheet.get_worksheet(WORKSHEET_INDEX)
     logger.info(f"구글 시트 연결 완료: {spreadsheet.title} / {worksheet.title}")
     return worksheet
 
 
 def load_keywords_from_sheet(worksheet):
-    """구글 시트의 지정 열에서 키워드 목록을 읽어옵니다."""
-    col_values = worksheet.col_values(
-        ord(KEYWORDS_COLUMN.upper()) - ord("A") + 1
-    )
-    # 헤더 행 이후의 값만 사용하고 빈 문자열 제외
-    keywords = [
-        kw.strip()
-        for kw in col_values[KEYWORDS_START_ROW - 1 :]
-        if kw.strip()
-    ]
-    logger.info(f"시트에서 {len(keywords)}개 키워드 로드 완료")
-    return keywords
+    """구글 시트 A열에서 키워드와 행 번호를 함께 반환합니다.
 
-
-def write_result_to_sheet(worksheet, row_data):
-    """결과를 구글 시트의 다음 빈 행에 기록합니다.
-
-    row_data 형식:
-    [날짜, 키워드, 1위질문_순위, 1위질문_링크, 2위질문_순위, 2위질문_링크, 비고]
+    Returns:
+        list[tuple]: [(row_number, keyword), ...]
     """
-    worksheet.append_row(row_data, value_input_option="USER_ENTERED")
-    logger.info(f"시트 기록 완료: {row_data[1]} (키워드)")
+    col_idx = col_letter_to_index(KEYWORDS_COLUMN)
+    col_values = worksheet.col_values(col_idx)
+
+    entries = []
+    for i, val in enumerate(col_values[KEYWORDS_START_ROW - 1:], start=KEYWORDS_START_ROW):
+        kw = val.strip()
+        if kw:
+            entries.append((i, kw))
+
+    logger.info(f"시트에서 {len(entries)}개 키워드 로드 완료")
+    return entries
+
+
+def flush_to_sheet(worksheet, all_results):
+    """전체 결과에서 중복 URL을 처리하고 시트의 해당 행 셀을 일괄 업데이트합니다.
+
+    쓰기 대상 열:
+      B(RANK_COL_1): 1위 게시물 현재 순위
+      C(LINK_COL_1): 1위 게시물 답변 링크
+      I(RANK_COL_2): 2위 게시물 현재 순위
+      J(LINK_COL_2): 2위 게시물 답변 링크
+    """
+    seen_urls = set()
+    duplicate_count = 0
+
+    # gspread batch_update 형식: [{"range": "B4", "values": [["값"]]}, ...]
+    updates = []
+
+    for entry in all_results:
+        row = entry["row"]
+        results = entry["results"]  # 최대 2개: [1위 게시물, 2위 게시물]
+
+        col_pairs = [
+            (RANK_COL_1, LINK_COL_1),
+            (RANK_COL_2, LINK_COL_2),
+        ]
+
+        for idx, (rank_col, link_col) in enumerate(col_pairs):
+            if idx >= len(results):
+                break
+
+            item = results[idx]
+            url = item["url"]
+            rank_text = item["rank_text"]
+
+            # 중복 URL 처리
+            if url and url in seen_urls:
+                rank_text = "중복"
+                duplicate_count += 1
+                logger.info(f"[중복 감지] '{entry['keyword']}' {idx+1}위 게시물 — {url}")
+            elif url:
+                seen_urls.add(url)
+
+            updates.append({"range": f"{rank_col}{row}", "values": [[rank_text]]})
+            updates.append({"range": f"{link_col}{row}", "values": [[url]]})
+
+    if updates:
+        worksheet.batch_update(updates, value_input_option="USER_ENTERED")
+
+    logger.info(
+        f"시트 업데이트 완료 — {len(all_results)}개 키워드, "
+        f"중복 {duplicate_count}건"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -138,13 +186,10 @@ async def search_naver_kin(page, keyword):
     await page.goto(search_url, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT)
     await random_delay()
 
-    # 검색 결과 목록에서 상위 질문 링크 추출
     results = []
-    # 지식인 검색 결과는 .basic1 > li 형태로 나열됨
     search_items = await page.query_selector_all("ul.basic1 > li")
 
     if not search_items:
-        # 대체 셀렉터 시도 (네이버 UI 변경 대응)
         search_items = await page.query_selector_all(".search_list > li")
 
     if not search_items:
@@ -162,7 +207,6 @@ async def search_naver_kin(page, keyword):
                 href = await link_el.get_attribute("href")
                 title = (await link_el.inner_text()).strip()
                 if href:
-                    # 상대 경로 처리
                     if href.startswith("/"):
                         href = "https://kin.naver.com" + href
                     results.append({
@@ -185,17 +229,17 @@ async def check_answerer_rank(page, question_url, target_name):
 
     Returns:
         dict: {
-            "rank": int or None,  # 타겟의 순위 (없으면 None)
-            "is_top1": bool,      # 1위 여부
-            "total_answers": int,  # 전체 답변 수
-            "top1_answerer": str,  # 1위 답변자 이름
+            "rank": int or None,
+            "is_top1": bool,
+            "total_answers": int,
+            "top1_answerer": str,
         }
     """
     logger.info(f"질문 페이지 접속: {question_url}")
     await page.goto(question_url, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT)
     await random_delay()
 
-    # ─── '더보기' 버튼 처리 (답변이 많을 경우) ───
+    # ─── '더보기' 버튼 처리 ───
     more_clicked = 0
     while True:
         try:
@@ -207,7 +251,7 @@ async def check_answerer_rank(page, question_url, target_name):
                 await more_btn.click()
                 more_clicked += 1
                 await random_delay(1, 2)
-                if more_clicked > 10:  # 안전장치
+                if more_clicked > 10:
                     break
             else:
                 break
@@ -218,9 +262,6 @@ async def check_answerer_rank(page, question_url, target_name):
         logger.info(f"'더보기' 버튼 {more_clicked}회 클릭")
 
     # ─── 답변 목록 파싱 ───
-    # 네이버 지식인 답변 구조:
-    # 1) 채택 답변 (class에 'adopted' 포함) — 항상 최상단
-    # 2) 일반 답변 (순서대로 나열)
     answer_items = await page.query_selector_all(
         ".answer-content__list > li, "
         "div.answer_area, "
@@ -229,7 +270,6 @@ async def check_answerer_rank(page, question_url, target_name):
         "div[class*='answer']"
     )
 
-    # 더 구체적인 셀렉터로 재시도
     if not answer_items:
         answer_items = await page.query_selector_all(
             "#answerArea div.se_component_wrap, "
@@ -237,10 +277,8 @@ async def check_answerer_rank(page, question_url, target_name):
         )
 
     answerer_list = []
-
     for item in answer_items:
         try:
-            # 답변자 이름 추출 (여러 셀렉터 시도)
             name_el = await item.query_selector(
                 ".answer_nickname, "
                 ".c-userinfo__name, "
@@ -257,7 +295,7 @@ async def check_answerer_rank(page, question_url, target_name):
         except Exception:
             continue
 
-    # 중복 제거하면서 순서 유지 (같은 사람이 여러 번 잡힐 수 있음)
+    # 중복 제거 (순서 유지)
     seen = set()
     unique_answerers = []
     for name in answerer_list:
@@ -268,7 +306,6 @@ async def check_answerer_rank(page, question_url, target_name):
     total = len(unique_answerers)
     top1 = unique_answerers[0] if unique_answerers else "확인불가"
 
-    # 타겟 답변자 순위 찾기
     target_rank = None
     for idx, name in enumerate(unique_answerers):
         if target_name in name:
@@ -295,37 +332,30 @@ async def check_answerer_rank(page, question_url, target_name):
 # ═══════════════════════════════════════════════════════════════
 
 
-async def process_keyword(page, keyword):
+async def process_keyword(page, row_number, keyword):
     """하나의 키워드에 대한 전체 처리 흐름을 실행합니다.
 
     Returns:
         dict: {
+            "row": int,           # 시트 행 번호
             "keyword": str,
-            "date": str,
             "results": list[dict],  # [{"rank_text": ..., "url": ...}, ...]
-            "note": str,
         }
     """
-    today = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-    # 1) 키워드 검색
     search_results = await search_naver_kin(page, keyword)
 
     if not search_results:
-        logger.warning(f"'{keyword}' 검색 결과 없음 — 스킵")
+        logger.warning(f"'{keyword}' 검색 결과 없음")
         return {
+            "row": row_number,
             "keyword": keyword,
-            "date": today,
             "results": [
                 {"rank_text": "검색결과없음", "url": ""},
                 {"rank_text": "검색결과없음", "url": ""},
             ],
-            "note": "검색 결과를 찾을 수 없음",
         }
 
-    # 2) 각 상위 게시물 분석
     result_items = []
-    should_record = False
 
     for sr in search_results:
         rank_label = f"{sr['rank']}위 게시물"
@@ -336,76 +366,33 @@ async def process_keyword(page, keyword):
             rank_info = await check_answerer_rank(page, url, TARGET_ANSWERER)
 
             if rank_info["is_top1"]:
-                rank_text = f"1위 ('{TARGET_ANSWERER}' 최상단)"
-                logger.info(f"[{rank_label}] '{TARGET_ANSWERER}'이(가) 1위 — 스킵")
+                rank_text = "1"
+                logger.info(f"[{rank_label}] '{TARGET_ANSWERER}' 1위")
             else:
-                should_record = True
                 if rank_info["rank"]:
-                    rank_text = f"{rank_info['rank']}위 (1위: {rank_info['top1_answerer']})"
+                    rank_text = str(rank_info["rank"])
                 else:
-                    rank_text = f"순위권 밖 (1위: {rank_info['top1_answerer']}, 총 {rank_info['total_answers']}개 답변)"
-                logger.info(f"[{rank_label}] '{TARGET_ANSWERER}' → {rank_text}")
+                    rank_text = f"없음(1위:{rank_info['top1_answerer']})"
+                logger.info(f"[{rank_label}] '{TARGET_ANSWERER}' → {rank_text}위")
 
         except PlaywrightTimeout:
-            logger.error(f"[{rank_label}] 페이지 로드 타임아웃: {url}")
+            logger.error(f"[{rank_label}] 타임아웃: {url}")
             rank_text = "타임아웃"
-            should_record = True
         except Exception as e:
-            logger.error(f"[{rank_label}] 분석 실패: {e}")
-            rank_text = f"오류: {str(e)[:30]}"
-            should_record = True
+            logger.error(f"[{rank_label}] 오류: {e}")
+            rank_text = f"오류"
 
         result_items.append({"rank_text": rank_text, "url": url})
 
-    # 부족한 결과 패딩
+    # 결과가 TOP_N_RESULTS보다 적을 경우 패딩
     while len(result_items) < TOP_N_RESULTS:
-        result_items.append({"rank_text": "결과없음", "url": ""})
-
-    note = ""
-    if not should_record:
-        note = f"모든 게시물에서 '{TARGET_ANSWERER}' 1위"
+        result_items.append({"rank_text": "", "url": ""})
 
     return {
+        "row": row_number,
         "keyword": keyword,
-        "date": today,
         "results": result_items,
-        "note": note,
     }
-
-
-def deduplicate_and_write(all_results, worksheet):
-    """전체 결과에서 중복 링크를 찾아 '중복' 표시 후 시트에 기록합니다.
-
-    동일한 URL이 여러 키워드에서 등장할 경우,
-    가장 처음 등장한 것만 원래 순위를 유지하고
-    이후 등장은 순위란에 '중복'으로 표시합니다.
-    """
-    seen_urls = set()  # 전체 키워드에 걸쳐 이미 등장한 URL 추적
-    duplicate_count = 0
-
-    for entry in all_results:
-        row = [entry["date"], entry["keyword"]]
-
-        for item in entry["results"]:
-            url = item["url"]
-            rank_text = item["rank_text"]
-
-            if url and url in seen_urls:
-                # 이미 다른 키워드에서 등장한 링크 → 중복 표시
-                row.extend(["중복", url])
-                duplicate_count += 1
-                logger.info(
-                    f"[중복 감지] '{entry['keyword']}' — {url}"
-                )
-            else:
-                row.extend([rank_text, url])
-                if url:
-                    seen_urls.add(url)
-
-        row.append(entry["note"])
-        write_result_to_sheet(worksheet, row)
-
-    logger.info(f"중복 링크 총 {duplicate_count}건 감지 및 표시 완료")
 
 
 async def main():
@@ -423,31 +410,21 @@ async def main():
         logger.error("credentials.json 파일과 시트 공유 설정을 확인하세요.")
         sys.exit(1)
 
-    # 2) 키워드 로드
+    # 2) 키워드 로드 (행 번호 포함)
     if USE_SHEET_KEYWORDS:
-        keywords = load_keywords_from_sheet(worksheet)
+        keyword_entries = load_keywords_from_sheet(worksheet)
     else:
-        keywords = KEYWORDS
+        keyword_entries = [
+            (KEYWORDS_START_ROW + i, kw) for i, kw in enumerate(KEYWORDS)
+        ]
 
-    if not keywords:
-        logger.error("키워드가 없습니다. config.py를 확인하세요.")
+    if not keyword_entries:
+        logger.error("키워드가 없습니다. config.py 또는 시트를 확인하세요.")
         sys.exit(1)
 
-    logger.info(f"총 {len(keywords)}개 키워드 처리 예정")
+    logger.info(f"총 {len(keyword_entries)}개 키워드 처리 예정")
 
-    # 3) 시트 헤더 확인/작성
-    existing_headers = worksheet.row_values(1)
-    expected_headers = [
-        "날짜", "키워드",
-        "1위 게시물 순위", "1위 게시물 링크",
-        "2위 게시물 순위", "2위 게시물 링크",
-        "비고",
-    ]
-    if not existing_headers or existing_headers[0] != expected_headers[0]:
-        worksheet.insert_row(expected_headers, 1)
-        logger.info("시트 헤더 작성 완료")
-
-    # 4) Playwright 브라우저 시작
+    # 3) Playwright 브라우저 시작
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(
             headless=HEADLESS,
@@ -464,43 +441,40 @@ async def main():
             timezone_id="Asia/Seoul",
         )
 
-        # navigator.webdriver 감지 우회
         await context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => false,
-            });
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
         """)
 
         page = await context.new_page()
 
-        # 5) 키워드별 처리 — 결과를 메모리에 수집
+        # 4) 키워드별 처리 — 결과를 메모리에 수집
         all_results = []
         success_count = 0
         fail_count = 0
 
-        for i, keyword in enumerate(keywords, 1):
+        for i, (row_number, keyword) in enumerate(keyword_entries, 1):
             logger.info(f"\n{'─' * 40}")
-            logger.info(f"[{i}/{len(keywords)}] 키워드: '{keyword}'")
+            logger.info(f"[{i}/{len(keyword_entries)}] 행{row_number} '{keyword}'")
             logger.info(f"{'─' * 40}")
 
             try:
-                result = await process_keyword(page, keyword)
+                result = await process_keyword(page, row_number, keyword)
                 all_results.append(result)
                 success_count += 1
             except Exception as e:
-                logger.error(f"키워드 '{keyword}' 처리 중 오류: {e}")
+                logger.error(f"'{keyword}' 처리 중 오류: {e}")
                 fail_count += 1
 
-            # 키워드 간 딜레이 (봇 탐지 방지)
-            if i < len(keywords):
+            # 키워드 간 딜레이
+            if i < len(keyword_entries):
                 delay = random.uniform(MIN_DELAY + 1, MAX_DELAY + 2)
                 logger.info(f"다음 키워드까지 {delay:.1f}초 대기...")
                 await asyncio.sleep(delay)
 
-            # 10개 키워드마다 User-Agent 변경
+            # 10개마다 User-Agent 교체
             if i % 10 == 0:
                 new_ua = get_random_user_agent()
-                logger.info(f"User-Agent 변경: ...{new_ua[-30:]}")
+                logger.info(f"User-Agent 변경")
                 await context.close()
                 context = await browser.new_context(
                     user_agent=new_ua,
@@ -509,24 +483,22 @@ async def main():
                     timezone_id="Asia/Seoul",
                 )
                 await context.add_init_script("""
-                    Object.defineProperty(navigator, 'webdriver', {
-                        get: () => false,
-                    });
+                    Object.defineProperty(navigator, 'webdriver', { get: () => false });
                 """)
                 page = await context.new_page()
 
         await browser.close()
 
-    # 6) 전체 결과에서 중복 링크 처리 후 시트에 일괄 기록
+    # 5) 중복 처리 후 시트에 일괄 업데이트
     logger.info("\n" + "─" * 40)
-    logger.info("전체 키워드 탐색 완료 — 중복 링크 검사 및 시트 기록 시작")
+    logger.info("탐색 완료 — 중복 검사 및 시트 기록 시작")
     logger.info("─" * 40)
-    deduplicate_and_write(all_results, worksheet)
+    flush_to_sheet(worksheet, all_results)
 
-    # 7) 완료 리포트
+    # 6) 완료 리포트
     logger.info("\n" + "=" * 60)
     logger.info("모니터링 완료!")
-    logger.info(f"성공: {success_count}개 / 실패: {fail_count}개 / 전체: {len(keywords)}개")
+    logger.info(f"성공: {success_count} / 실패: {fail_count} / 전체: {len(keyword_entries)}")
     logger.info("=" * 60)
 
 

@@ -7,9 +7,19 @@ TARGET_ANSWERER = "새집느낌"
 
 # ─── 구글 시트 설정 ───
 GOOGLE_SHEETS_CREDENTIALS_FILE = "credentials.json"  # 서비스 계정 JSON 키 파일 경로
-SPREADSHEET_NAME = "네이버 지식인 모니터링"  # 구글 시트 이름 (또는 SPREADSHEET_KEY 사용)
-SPREADSHEET_KEY = "1dv40s8cfKBzSlw42-Ax74BdnVOXz_XN3iwIZK44R-8Q"  # 구글 시트 URL에서 /d/ 뒤의 키
-WORKSHEET_NAME = "Sheet1"  # 워크시트(탭) 이름
+SPREADSHEET_KEY = "1dv40s8cfKBzSlw42-Ax74BdnVOXz_XN3iwIZK44R-8Q"
+WORKSHEET_INDEX = 0  # 첫 번째 탭 (gid=0)
+
+# ─── 시트 레이아웃 ───
+# 키워드 위치
+KEYWORDS_COLUMN = "A"   # 키워드 열
+KEYWORDS_START_ROW = 4  # 키워드 시작 행 (1~3행은 헤더/제목)
+
+# 결과 쓰기 열 (기존 행을 업데이트, 새 행 추가 안 함)
+RANK_COL_1 = "B"   # 1위 게시물 현재 순위
+LINK_COL_1 = "C"   # 1위 게시물 답변 링크
+RANK_COL_2 = "I"   # 2위 게시물 현재 순위
+LINK_COL_2 = "J"   # 2위 게시물 답변 링크
 
 # ─── 검색 설정 ───
 TOP_N_RESULTS = 2  # 검색 결과에서 확인할 상위 게시물 수 (1위, 2위)
@@ -34,17 +44,12 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
 ]
 
-# ─── 66개 키워드 리스트 ───
-# 구글 시트에서 읽어올 수도 있고, 여기에 직접 정의할 수도 있음
-# USE_SHEET_KEYWORDS = True 로 설정하면 구글 시트의 A열에서 키워드를 읽어옴
+# ─── 키워드 소스 ───
+# True: 시트 A열에서 읽기 / False: 아래 KEYWORDS 리스트 사용
 USE_SHEET_KEYWORDS = True
-KEYWORDS_COLUMN = "A"  # 키워드가 있는 열
-KEYWORDS_START_ROW = 2  # 키워드 시작 행 (1행은 헤더)
 
-# 구글 시트 대신 직접 키워드를 정의할 경우 아래 리스트 사용
 KEYWORDS = [
     # 예시 - 실제 키워드로 교체하세요
     # "인테리어 비용",
     # "집 리모델링",
-    # ...
 ]
