@@ -278,10 +278,18 @@ async def check_answerer_rank(page, question_url, target_name):
             "div.answer_area"
         )
 
-    # 답변자별 (이름, 따봉수) 수집
-    answerer_data = []  # [(name, likes), ...]
+    # 답변자별 (이름, 따봉수, 답변번호) 수집
+    answerer_data = []  # [(name, likes, answer_no), ...]
     for item in answer_items:
         try:
+            # 답변 번호 추출 — id="answer_13" → "13"
+            answer_no = None
+            answer_el = await item.query_selector("[id^='answer_']")
+            if answer_el:
+                answer_id = await answer_el.get_attribute("id")
+                if answer_id and "_" in answer_id:
+                    answer_no = answer_id.split("_", 1)[1]
+
             # 답변자 이름 — career_list span에서 해시태그 파싱
             name = None
 
@@ -332,28 +340,30 @@ async def check_answerer_rank(page, question_url, target_name):
                         likes = int(likes_text)
                         break
 
-            answerer_data.append((name, likes))
-            logger.debug(f"  답변자 발견: {name}, 따봉: {likes}")
+            answerer_data.append((name, likes, answer_no))
+            logger.debug(f"  답변자 발견: {name}, 따봉: {likes}, answerNo: {answer_no}")
         except Exception:
             continue
 
     # 중복 이름 제거 (순서 유지, 첫 등장 기준)
     seen = set()
     unique_data = []
-    for name, likes in answerer_data:
+    for name, likes, answer_no in answerer_data:
         if name not in seen:
             seen.add(name)
-            unique_data.append((name, likes))
+            unique_data.append((name, likes, answer_no))
 
     total = len(unique_data)
     top1 = unique_data[0][0] if unique_data else "확인불가"
 
     target_rank = None
     target_likes = None
-    for idx, (name, likes) in enumerate(unique_data):
+    target_answer_no = None
+    for idx, (name, likes, answer_no) in enumerate(unique_data):
         if target_name in name:
             target_rank = idx + 1
             target_likes = likes
+            target_answer_no = answer_no
             break
 
     result = {
@@ -362,6 +372,7 @@ async def check_answerer_rank(page, question_url, target_name):
         "total_answers": total,
         "top1_answerer": top1,
         "target_likes": target_likes,
+        "target_answer_no": target_answer_no,
     }
 
     logger.info(
@@ -422,6 +433,11 @@ async def process_keyword(page, row_number, keyword):
                 logger.info(f"[{rank_label}] '{TARGET_ANSWERER}' → {rank_text}위")
 
             likes = rank_info["target_likes"]
+
+            # URL에 answerNo 파라미터 추가
+            answer_no = rank_info.get("target_answer_no")
+            if answer_no:
+                url = f"{url}&answerNo={answer_no}"
 
         except PlaywrightTimeout:
             logger.error(f"[{rank_label}] 타임아웃: {url}")
