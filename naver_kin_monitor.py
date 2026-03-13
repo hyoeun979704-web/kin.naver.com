@@ -295,8 +295,17 @@ async def check_answerer_rank(page, question_url, target_name):
 # ═══════════════════════════════════════════════════════════════
 
 
-async def process_keyword(page, keyword, worksheet):
-    """하나의 키워드에 대한 전체 처리 흐름을 실행합니다."""
+async def process_keyword(page, keyword):
+    """하나의 키워드에 대한 전체 처리 흐름을 실행합니다.
+
+    Returns:
+        dict: {
+            "keyword": str,
+            "date": str,
+            "results": list[dict],  # [{"rank_text": ..., "url": ...}, ...]
+            "note": str,
+        }
+    """
     today = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # 1) 키워드 검색
@@ -304,73 +313,99 @@ async def process_keyword(page, keyword, worksheet):
 
     if not search_results:
         logger.warning(f"'{keyword}' 검색 결과 없음 — 스킵")
-        write_result_to_sheet(worksheet, [
-            today, keyword,
-            "검색결과없음", "", "검색결과없음", "", "검색 결과를 찾을 수 없음"
-        ])
-        return
+        return {
+            "keyword": keyword,
+            "date": today,
+            "results": [
+                {"rank_text": "검색결과없음", "url": ""},
+                {"rank_text": "검색결과없음", "url": ""},
+            ],
+            "note": "검색 결과를 찾을 수 없음",
+        }
 
     # 2) 각 상위 게시물 분석
-    results_for_sheet = [today, keyword]
-    should_record = False  # 기록 필요 여부
-    seen_urls = set()  # 중복 링크 감지용
+    result_items = []
+    should_record = False
 
     for sr in search_results:
         rank_label = f"{sr['rank']}위 게시물"
         url = sr["url"]
-
-        # ─── 중복 링크 체크 ───
-        if url in seen_urls:
-            results_for_sheet.extend(["중복", url])
-            logger.info(f"[{rank_label}] 중복 링크 — 스킵: {url}")
-            continue
-        seen_urls.add(url)
-
         await random_delay()
 
         try:
             rank_info = await check_answerer_rank(page, url, TARGET_ANSWERER)
 
             if rank_info["is_top1"]:
-                # 타겟이 1위 → 기록 항목에 "1위(스킵)" 표시
-                results_for_sheet.extend([
-                    f"1위 ('{TARGET_ANSWERER}' 최상단)",
-                    url,
-                ])
-                logger.info(
-                    f"[{rank_label}] '{TARGET_ANSWERER}'이(가) 1위 — 스킵"
-                )
+                rank_text = f"1위 ('{TARGET_ANSWERER}' 최상단)"
+                logger.info(f"[{rank_label}] '{TARGET_ANSWERER}'이(가) 1위 — 스킵")
             else:
                 should_record = True
                 if rank_info["rank"]:
                     rank_text = f"{rank_info['rank']}위 (1위: {rank_info['top1_answerer']})"
                 else:
                     rank_text = f"순위권 밖 (1위: {rank_info['top1_answerer']}, 총 {rank_info['total_answers']}개 답변)"
-                results_for_sheet.extend([rank_text, url])
                 logger.info(f"[{rank_label}] '{TARGET_ANSWERER}' → {rank_text}")
 
         except PlaywrightTimeout:
             logger.error(f"[{rank_label}] 페이지 로드 타임아웃: {url}")
-            results_for_sheet.extend(["타임아웃", url])
+            rank_text = "타임아웃"
             should_record = True
         except Exception as e:
             logger.error(f"[{rank_label}] 분석 실패: {e}")
-            results_for_sheet.extend([f"오류: {str(e)[:30]}", url])
+            rank_text = f"오류: {str(e)[:30]}"
             should_record = True
 
-    # 부족한 결과 패딩 (TOP_N_RESULTS보다 적을 경우)
-    while len(results_for_sheet) < 2 + TOP_N_RESULTS * 2:
-        results_for_sheet.extend(["결과없음", ""])
+        result_items.append({"rank_text": rank_text, "url": url})
 
-    # 비고란
+    # 부족한 결과 패딩
+    while len(result_items) < TOP_N_RESULTS:
+        result_items.append({"rank_text": "결과없음", "url": ""})
+
+    note = ""
     if not should_record:
-        results_for_sheet.append(f"모든 게시물에서 '{TARGET_ANSWERER}' 1위")
-    else:
-        results_for_sheet.append("")
+        note = f"모든 게시물에서 '{TARGET_ANSWERER}' 1위"
 
-    # 3) 시트에 기록 (타겟이 1위가 아닌 경우가 하나라도 있으면 기록)
-    # 모든 결과를 기록하되, 비고란에서 상태를 구분
-    write_result_to_sheet(worksheet, results_for_sheet)
+    return {
+        "keyword": keyword,
+        "date": today,
+        "results": result_items,
+        "note": note,
+    }
+
+
+def deduplicate_and_write(all_results, worksheet):
+    """전체 결과에서 중복 링크를 찾아 '중복' 표시 후 시트에 기록합니다.
+
+    동일한 URL이 여러 키워드에서 등장할 경우,
+    가장 처음 등장한 것만 원래 순위를 유지하고
+    이후 등장은 순위란에 '중복'으로 표시합니다.
+    """
+    seen_urls = set()  # 전체 키워드에 걸쳐 이미 등장한 URL 추적
+    duplicate_count = 0
+
+    for entry in all_results:
+        row = [entry["date"], entry["keyword"]]
+
+        for item in entry["results"]:
+            url = item["url"]
+            rank_text = item["rank_text"]
+
+            if url and url in seen_urls:
+                # 이미 다른 키워드에서 등장한 링크 → 중복 표시
+                row.extend(["중복", url])
+                duplicate_count += 1
+                logger.info(
+                    f"[중복 감지] '{entry['keyword']}' — {url}"
+                )
+            else:
+                row.extend([rank_text, url])
+                if url:
+                    seen_urls.add(url)
+
+        row.append(entry["note"])
+        write_result_to_sheet(worksheet, row)
+
+    logger.info(f"중복 링크 총 {duplicate_count}건 감지 및 표시 완료")
 
 
 async def main():
@@ -438,7 +473,8 @@ async def main():
 
         page = await context.new_page()
 
-        # 5) 키워드별 처리
+        # 5) 키워드별 처리 — 결과를 메모리에 수집
+        all_results = []
         success_count = 0
         fail_count = 0
 
@@ -448,7 +484,8 @@ async def main():
             logger.info(f"{'─' * 40}")
 
             try:
-                await process_keyword(page, keyword, worksheet)
+                result = await process_keyword(page, keyword)
+                all_results.append(result)
                 success_count += 1
             except Exception as e:
                 logger.error(f"키워드 '{keyword}' 처리 중 오류: {e}")
@@ -480,7 +517,13 @@ async def main():
 
         await browser.close()
 
-    # 6) 완료 리포트
+    # 6) 전체 결과에서 중복 링크 처리 후 시트에 일괄 기록
+    logger.info("\n" + "─" * 40)
+    logger.info("전체 키워드 탐색 완료 — 중복 링크 검사 및 시트 기록 시작")
+    logger.info("─" * 40)
+    deduplicate_and_write(all_results, worksheet)
+
+    # 7) 완료 리포트
     logger.info("\n" + "=" * 60)
     logger.info("모니터링 완료!")
     logger.info(f"성공: {success_count}개 / 실패: {fail_count}개 / 전체: {len(keywords)}개")
