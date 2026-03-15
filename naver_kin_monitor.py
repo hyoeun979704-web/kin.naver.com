@@ -162,15 +162,22 @@ def flush_to_sheet(worksheet, all_results, afternoon=False):
                 seen_doc_ids.add(doc_id)
 
             updates.append({"range": f"{rank_col}{row}", "values": [[rank_text]]})
-            updates.append({"range": f"{link_col}{row}", "values": [[url]]})
-            if likes is not None:
-                updates.append({"range": f"{likes_col}{row}", "values": [[likes]]})
-            # 오전: 요청 따봉 갯수 / 오후: 실제 작업수량
-            target_col = actual_col if afternoon else needed_col
-            updates.append({
-                "range": f"{target_col}{row}",
-                "values": [[needed_likes if needed_likes is not None else ""]],
-            })
+
+            if afternoon:
+                # 오후: 순위 + 실제 작업수량(현재 따봉 갯수)만 기록
+                updates.append({
+                    "range": f"{actual_col}{row}",
+                    "values": [[likes if likes is not None else ""]],
+                })
+            else:
+                # 오전: 순위 + 링크 + 따봉 갯수 + 요청 갯수
+                updates.append({"range": f"{link_col}{row}", "values": [[url]]})
+                if likes is not None:
+                    updates.append({"range": f"{likes_col}{row}", "values": [[likes]]})
+                updates.append({
+                    "range": f"{needed_col}{row}",
+                    "values": [[needed_likes if needed_likes is not None else ""]],
+                })
 
     if updates:
         worksheet.batch_update(updates, value_input_option="USER_ENTERED")
