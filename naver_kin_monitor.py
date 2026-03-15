@@ -33,9 +33,11 @@ from config import (
     RANK_COL_1,
     LINK_COL_1,
     LIKES_COL_1,
+    NEEDED_LIKES_COL_1,
     RANK_COL_2,
     LINK_COL_2,
     LIKES_COL_2,
+    NEEDED_LIKES_COL_2,
     KEYWORDS,
 )
 
@@ -122,11 +124,11 @@ def flush_to_sheet(worksheet, all_results):
         results = entry["results"]  # 최대 2개: [1위 게시물, 2위 게시물]
 
         col_pairs = [
-            (RANK_COL_1, LINK_COL_1, LIKES_COL_1),
-            (RANK_COL_2, LINK_COL_2, LIKES_COL_2),
+            (RANK_COL_1, LINK_COL_1, LIKES_COL_1, NEEDED_LIKES_COL_1),
+            (RANK_COL_2, LINK_COL_2, LIKES_COL_2, NEEDED_LIKES_COL_2),
         ]
 
-        for idx, (rank_col, link_col, likes_col) in enumerate(col_pairs):
+        for idx, (rank_col, link_col, likes_col, needed_col) in enumerate(col_pairs):
             if idx >= len(results):
                 break
 
@@ -134,6 +136,7 @@ def flush_to_sheet(worksheet, all_results):
             url = item["url"]
             rank_text = item["rank_text"]
             likes = item["likes"]
+            needed_likes = item.get("needed_likes")
 
             # 중복 링크 처리 (docId 기준)
             doc_id = extract_doc_id(url) if url else None
@@ -148,6 +151,11 @@ def flush_to_sheet(worksheet, all_results):
             updates.append({"range": f"{link_col}{row}", "values": [[url]]})
             if likes is not None:
                 updates.append({"range": f"{likes_col}{row}", "values": [[likes]]})
+            # 요청 따봉 갯수 기록 (1위면 빈 값으로 초기화)
+            updates.append({
+                "range": f"{needed_col}{row}",
+                "values": [[needed_likes if needed_likes is not None else ""]],
+            })
 
     if updates:
         worksheet.batch_update(updates, value_input_option="USER_ENTERED")
@@ -362,6 +370,7 @@ async def check_answerer_rank(page, question_url, target_name):
 
     total = len(unique_data)
     top1 = unique_data[0][0] if unique_data else "확인불가"
+    top1_likes = unique_data[0][1] if unique_data else None
 
     target_rank = None
     target_likes = None
@@ -378,6 +387,7 @@ async def check_answerer_rank(page, question_url, target_name):
         "is_top1": target_rank == 1,
         "total_answers": total,
         "top1_answerer": top1,
+        "top1_likes": top1_likes,
         "target_likes": target_likes,
         "target_answer_no": target_answer_no,
     }
@@ -394,6 +404,25 @@ async def check_answerer_rank(page, question_url, target_name):
 # ═══════════════════════════════════════════════════════════════
 # 메인 실행 로직
 # ═══════════════════════════════════════════════════════════════
+
+
+def calc_needed_likes(top1_likes, target_likes):
+    """1위가 되기 위해 필요한 요청 따봉 갯수를 계산합니다.
+
+    - 1위 따봉 수를 넘기 위해 필요한 차이를 구합니다.
+    - 최소 10개, 5개 단위로 올림합니다.
+
+    Returns:
+        int or None: 필요한 따봉 갯수 (이미 1위이거나 데이터 없으면 None)
+    """
+    if top1_likes is None or target_likes is None:
+        return None
+    raw = top1_likes - target_likes + 1
+    if raw <= 0:
+        return None  # 이미 1위 따봉 수 이상
+    # 5 단위 올림, 최소 10
+    rounded = ((raw + 4) // 5) * 5
+    return max(rounded, 10)
 
 
 async def process_keyword(page, row_number, keyword):
@@ -414,8 +443,8 @@ async def process_keyword(page, row_number, keyword):
             "row": row_number,
             "keyword": keyword,
             "results": [
-                {"rank_text": "검색결과없음", "url": "", "likes": None},
-                {"rank_text": "검색결과없음", "url": "", "likes": None},
+                {"rank_text": "검색결과없음", "url": "", "likes": None, "needed_likes": None},
+                {"rank_text": "검색결과없음", "url": "", "likes": None, "needed_likes": None},
             ],
         }
 
@@ -441,6 +470,13 @@ async def process_keyword(page, row_number, keyword):
 
             likes = rank_info["target_likes"]
 
+            # 1위가 되기 위해 필요한 따봉 갯수 계산
+            needed_likes = None
+            if not rank_info["is_top1"] and rank_info["rank"]:
+                needed_likes = calc_needed_likes(
+                    rank_info["top1_likes"], rank_info["target_likes"]
+                )
+
             # URL에 answerNo 파라미터 추가
             answer_no = rank_info.get("target_answer_no")
             if answer_no:
@@ -450,16 +486,23 @@ async def process_keyword(page, row_number, keyword):
             logger.error(f"[{rank_label}] 타임아웃: {url}")
             rank_text = "타임아웃"
             likes = None
+            needed_likes = None
         except Exception as e:
             logger.error(f"[{rank_label}] 오류: {e}")
             rank_text = "오류"
             likes = None
+            needed_likes = None
 
-        result_items.append({"rank_text": rank_text, "url": url, "likes": likes})
+        result_items.append({
+            "rank_text": rank_text,
+            "url": url,
+            "likes": likes,
+            "needed_likes": needed_likes,
+        })
 
     # 결과가 TOP_N_RESULTS보다 적을 경우 패딩
     while len(result_items) < TOP_N_RESULTS:
-        result_items.append({"rank_text": "", "url": "", "likes": None})
+        result_items.append({"rank_text": "", "url": "", "likes": None, "needed_likes": None})
 
     return {
         "row": row_number,
