@@ -20,12 +20,12 @@ RANK_COL_1          = "B"  # 1위 게시물 현재 순위
 LINK_COL_1          = "C"  # 1위 게시물 답변 링크
 LIKES_COL_1         = "E"  # 1위 게시물 현재 따봉 갯수
 NEEDED_LIKES_COL_1  = "F"  # 1위 게시물 1등에 필요한 요청 따봉 갯수
-ACTUAL_LIKES_COL_1  = "G"  # 1위 게시물 실제 작업수량
+ACTUAL_LIKES_COL_1  = "H"  # 1위 게시물 실제 작업수량
 RANK_COL_2          = "I"  # 2위 게시물 현재 순위
 LINK_COL_2          = "J"  # 2위 게시물 답변 링크
 LIKES_COL_2         = "L"  # 2위 게시물 현재 따봉 갯수
 NEEDED_LIKES_COL_2  = "M"  # 2위 게시물 1등에 필요한 요청 따봉 갯수
-ACTUAL_LIKES_COL_2  = "N"  # 2위 게시물 실제 작업수량
+ACTUAL_LIKES_COL_2  = "O"  # 2위 게시물 실제 작업수량
 
 # ─── 검색 설정 ───
 TOP_N_RESULTS = 2  # 검색 결과에서 확인할 상위 게시물 수 (1위, 2위)
