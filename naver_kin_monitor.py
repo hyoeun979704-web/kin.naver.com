@@ -26,7 +26,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 BASE_DIR = Path(__file__).resolve().parent
 
 from config import (
-    TARGET_ANSWERER,
+    TARGET_ANSWERERS,
     GOOGLE_SHEETS_CREDENTIALS_FILE,
     SPREADSHEET_KEY,
     WORKSHEET_INDEX,
@@ -515,20 +515,35 @@ async def process_keyword(page, row_number, keyword):
         await random_delay()
 
         try:
-            rank_info = await check_answerer_rank(page, url, TARGET_ANSWERER)
+            # 여러 타겟 답변자 중 가장 높은 순위를 찾음
+            best_rank_info = None
+            matched_answerer = None
+            for answerer in TARGET_ANSWERERS:
+                rank_info = await check_answerer_rank(page, url, answerer)
+                if rank_info["rank"] is not None:
+                    if best_rank_info is None or rank_info["rank"] < best_rank_info["rank"]:
+                        best_rank_info = rank_info
+                        matched_answerer = answerer
+
+            # 매칭된 답변자가 없으면 마지막 결과 사용 (top1 정보 포함)
+            if best_rank_info is None:
+                best_rank_info = rank_info
+                matched_answerer = TARGET_ANSWERERS[0]
+
+            rank_info = best_rank_info
 
             if rank_info["is_top1"]:
                 rank_text = "1"
-                logger.info(f"[{rank_label}] '{TARGET_ANSWERER}' 1위")
+                logger.info(f"[{rank_label}] '{matched_answerer}' 1위")
             else:
                 if rank_info["rank"]:
                     rank_text = str(rank_info["rank"])
                 else:
                     rank_text = f"없음(1위:{rank_info['top1_answerer']})"
                 if rank_info["rank"]:
-                    logger.info(f"[{rank_label}] '{TARGET_ANSWERER}' → {rank_text}위")
+                    logger.info(f"[{rank_label}] '{matched_answerer}' → {rank_text}위")
                 else:
-                    logger.info(f"[{rank_label}] '{TARGET_ANSWERER}' → {rank_text}")
+                    logger.info(f"[{rank_label}] '{matched_answerer}' → {rank_text}")
 
             likes = rank_info["target_likes"]
 
@@ -583,7 +598,7 @@ async def main():
     logger.info("네이버 지식인 모니터링 봇 시작")
     logger.info(f"실행 시각: {now_kst} (KST)")
     logger.info(f"실행 모드: {mode_label}")
-    logger.info(f"타겟 답변자: {TARGET_ANSWERER}")
+    logger.info(f"타겟 답변자: {', '.join(TARGET_ANSWERERS)}")
     logger.info("=" * 60)
 
     # 1) 구글 시트 연결

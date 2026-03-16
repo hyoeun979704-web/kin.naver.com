@@ -3,7 +3,8 @@
 """
 
 # ─── 타겟 답변자 설정 ───
-TARGET_ANSWERER = "새집느낌"
+# 여러 계정을 모니터링할 경우 리스트에 추가
+TARGET_ANSWERERS = ["새집느낌", "새집느낌청소업체"]
 
 # ─── 구글 시트 설정 ───
 GOOGLE_SHEETS_CREDENTIALS_FILE = "credentials.json"  # 서비스 계정 JSON 키 파일 경로
