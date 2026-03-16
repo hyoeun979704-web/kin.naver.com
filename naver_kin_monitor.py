@@ -6,6 +6,9 @@
 """
 
 import asyncio
+import base64
+import json
+import os
 import random
 import logging
 import re
@@ -84,11 +87,40 @@ def col_letter_to_index(letter):
     return ord(letter.upper()) - ord("A") + 1
 
 
+def _load_credentials():
+    """구글 서비스 계정 인증 정보를 로드합니다.
+
+    우선순위:
+      1. 환경변수 GOOGLE_CREDENTIALS_JSON (JSON 문자열)
+      2. 환경변수 GOOGLE_CREDENTIALS_BASE64 (Base64 인코딩)
+      3. credentials.json 파일
+    """
+    env_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+    if env_json:
+        info = json.loads(env_json)
+        return Credentials.from_service_account_info(info, scopes=SCOPES)
+
+    env_b64 = os.environ.get("GOOGLE_CREDENTIALS_BASE64")
+    if env_b64:
+        info = json.loads(base64.b64decode(env_b64))
+        return Credentials.from_service_account_info(info, scopes=SCOPES)
+
+    creds_path = BASE_DIR / GOOGLE_SHEETS_CREDENTIALS_FILE
+    if creds_path.exists():
+        return Credentials.from_service_account_file(str(creds_path), scopes=SCOPES)
+
+    logger.error(
+        "인증 정보를 찾을 수 없습니다. 다음 중 하나를 설정하세요:\n"
+        "  1. 환경변수 GOOGLE_CREDENTIALS_JSON (JSON 문자열)\n"
+        "  2. 환경변수 GOOGLE_CREDENTIALS_BASE64 (Base64 인코딩)\n"
+        "  3. credentials.json 파일을 프로젝트 폴더에 배치"
+    )
+    sys.exit(1)
+
+
 def get_google_sheet():
     """구글 시트 워크시트 객체를 반환합니다."""
-    creds = Credentials.from_service_account_file(
-        BASE_DIR / GOOGLE_SHEETS_CREDENTIALS_FILE, scopes=SCOPES
-    )
+    creds = _load_credentials()
     client = gspread.authorize(creds)
     spreadsheet = client.open_by_key(SPREADSHEET_KEY)
     worksheet = spreadsheet.get_worksheet(WORKSHEET_INDEX)
