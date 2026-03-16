@@ -89,15 +89,16 @@ if not exist "credentials.json" (
     exit /b 1
 )
 
-:: --- 5. Run ---
+:: --- 5. Run scheduler ---
 echo.
 echo ============================================
-echo   [OK] Setup complete! Starting bot...
+echo   [OK] Setup complete! Starting scheduler...
+echo   Runs immediately, then at 09:00 / 14:00 KST
 echo ============================================
 echo.
 
-python naver_kin_monitor.py
+python scheduler.py
 
 echo.
-echo Bot execution finished.
+echo Scheduler stopped.
 pause
