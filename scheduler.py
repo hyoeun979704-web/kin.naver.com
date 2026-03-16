@@ -69,23 +69,32 @@ def main():
     print("\n[First run] Executing immediately...")
     run_monitor()
 
-    # Loop: wait for next scheduled time
+    # Track which schedule we already ran to avoid duplicates
+    last_ran = None
+
+    # Loop: check every 60 seconds if it's time to run
     while True:
         next_run = get_next_run_time()
-        current = now_kst()
-        wait_seconds = (next_run - current).total_seconds()
-
         next_str = next_run.strftime("%Y-%m-%d %H:%M")
-        print(f"\n[Next run] {next_str} KST (in {wait_seconds/60:.0f} min)")
-        print("Press Ctrl+C to stop.\n")
+        current = now_kst()
+        wait_min = (next_run - current).total_seconds() / 60
+        print(f"\r[Next run] {next_str} KST (in {wait_min:.0f} min)  ", end="", flush=True)
 
         try:
-            time.sleep(wait_seconds)
+            time.sleep(60)
         except KeyboardInterrupt:
             print("\n\nScheduler stopped by user.")
             sys.exit(0)
 
-        run_monitor()
+        # Check if current time matches any schedule
+        current = now_kst()
+        current_hour = current.hour
+        current_date = current.date()
+        run_key = (current_date, current_hour)
+
+        if current_hour in SCHEDULE_HOURS and run_key != last_ran:
+            last_ran = run_key
+            run_monitor()
 
 
 if __name__ == "__main__":
