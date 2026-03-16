@@ -13,9 +13,14 @@ import sys
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote_plus
 
+from pathlib import Path
+
 import gspread
 from google.oauth2.service_account import Credentials
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+
+# 스크립트 파일 기준 디렉토리 (실행 위치와 무관하게 동작)
+BASE_DIR = Path(__file__).resolve().parent
 
 from config import (
     TARGET_ANSWERER,
@@ -58,7 +63,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("monitor.log", encoding="utf-8"),
+        logging.FileHandler(BASE_DIR / "monitor.log", encoding="utf-8"),
     ],
 )
 logger = logging.getLogger(__name__)
@@ -82,7 +87,7 @@ def col_letter_to_index(letter):
 def get_google_sheet():
     """구글 시트 워크시트 객체를 반환합니다."""
     creds = Credentials.from_service_account_file(
-        GOOGLE_SHEETS_CREDENTIALS_FILE, scopes=SCOPES
+        BASE_DIR / GOOGLE_SHEETS_CREDENTIALS_FILE, scopes=SCOPES
     )
     client = gspread.authorize(creds)
     spreadsheet = client.open_by_key(SPREADSHEET_KEY)
