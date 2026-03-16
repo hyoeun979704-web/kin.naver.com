@@ -525,7 +525,10 @@ async def process_keyword(page, row_number, keyword):
                     rank_text = str(rank_info["rank"])
                 else:
                     rank_text = f"없음(1위:{rank_info['top1_answerer']})"
-                logger.info(f"[{rank_label}] '{TARGET_ANSWERER}' → {rank_text}위")
+                if rank_info["rank"]:
+                    logger.info(f"[{rank_label}] '{TARGET_ANSWERER}' → {rank_text}위")
+                else:
+                    logger.info(f"[{rank_label}] '{TARGET_ANSWERER}' → {rank_text}")
 
             likes = rank_info["target_likes"]
 

@@ -105,7 +105,7 @@ playwright install chromium
 
 1. [Google Sheets](https://sheets.google.com/) 접속
 2. **빈 스프레드시트** 생성
-3. 시트 이름을 `네이버 지식인 모니터링`으로 변경 (또는 config.py의 SPREADSHEET_NAME과 일치하게)
+3. 시트 이름을 원하는 이름으로 설정합니다.
 
 ### 4-2. 서비스 계정에 시트 공유
 
@@ -128,7 +128,7 @@ A열에 키워드를 입력합니다:
 | 새집 인테리어 |
 | ... (총 66개) |
 
-첫 번째 행은 헤더이므로 **2번째 행부터** 키워드를 입력합니다.
+1~3행은 헤더/제목이므로 **4번째 행부터** 키워드를 입력합니다. (config.py의 `KEYWORDS_START_ROW` 설정과 일치)
 
 ### 4-4. 시트 키 확인 (선택사항)
 
@@ -151,8 +151,7 @@ https://docs.google.com/spreadsheets/d/1aBcDeFgHiJkLmNoPqRsTuVwXyZ/edit
 TARGET_ANSWERER = "새집느낌"
 
 # 구글 시트 설정
-SPREADSHEET_NAME = "네이버 지식인 모니터링"  # 시트 이름
-SPREADSHEET_KEY = ""  # 또는 시트 URL의 키
+SPREADSHEET_KEY = "시트URL의키"  # 시트 URL에서 추출한 키
 
 # 키워드 소스 (True: 시트에서 읽기, False: KEYWORDS 리스트 사용)
 USE_SHEET_KEYWORDS = True
