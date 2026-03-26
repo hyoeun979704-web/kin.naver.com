@@ -14,7 +14,7 @@ import logging
 import re
 import sys
 from datetime import datetime, timezone, timedelta
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse, parse_qs, urlencode, urlunparse
 
 from pathlib import Path
 
@@ -614,10 +614,20 @@ async def process_keyword(page, row_number, keyword):
                     rank_info["top1_likes"], rank_info["target_likes"]
                 )
 
-            # URL에 answerNo 파라미터 추가
+            # URL 정리: 필요한 파라미터만 남기고 answerNo 추가
             answer_no = rank_info.get("target_answer_no")
+            parsed = urlparse(url)
+            params = parse_qs(parsed.query)
+            clean_params = {}
+            for key in ("d1id", "dirId", "docId"):
+                if key in params:
+                    clean_params[key] = params[key][0]
             if answer_no:
-                url = f"{url}&answerNo={answer_no}"
+                clean_params["answerNo"] = answer_no
+            url = urlunparse((
+                parsed.scheme, parsed.netloc, parsed.path,
+                "", urlencode(clean_params), "",
+            ))
 
         except PlaywrightTimeout:
             logger.error(f"[{rank_label}] 타임아웃: {url}")
