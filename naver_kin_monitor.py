@@ -267,7 +267,13 @@ def save_links_to_txt(all_results):
     sorted_counts = sorted(links_by_needed.keys())
 
     now_str = datetime.now(KST).strftime("%Y-%m-%d_%H%M")
-    txt_path = BASE_DIR / f"links_{now_str}.txt"
+
+    # 저장 경로: 지정된 폴더 → 없으면 프로젝트 폴더
+    save_dir = Path(r"C:\Users\PC\OneDrive\문서\Desktop\김효은")
+    if not save_dir.exists():
+        save_dir = BASE_DIR
+        logger.warning(f"저장 폴더를 찾을 수 없어 프로젝트 폴더에 저장합니다: {save_dir}")
+    txt_path = save_dir / f"links_{now_str}.txt"
 
     lines = []
     lines.append(f"따봉 신청 링크 정리 ({datetime.now(KST).strftime('%Y-%m-%d %H:%M')} KST)")
