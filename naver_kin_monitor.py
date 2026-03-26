@@ -263,6 +263,16 @@ def save_links_to_txt(all_results):
         logger.info("따봉 신청 링크 없음 — 메모장 생성 건너뜀")
         return
 
+    # 2차 중복 제거: URL 자체가 동일한 경우
+    for count in links_by_needed:
+        seen_urls = set()
+        unique = []
+        for url in links_by_needed[count]:
+            if url not in seen_urls:
+                seen_urls.add(url)
+                unique.append(url)
+        links_by_needed[count] = unique
+
     # 오름차순 정렬
     sorted_counts = sorted(links_by_needed.keys())
 
@@ -282,7 +292,7 @@ def save_links_to_txt(all_results):
     for count in sorted_counts:
         urls = links_by_needed[count]
         lines.append("")
-        lines.append(f"{count}개 (따봉 신청 갯수)")
+        lines.append(f"{count}개")
         for url in urls:
             lines.append(url)
 
