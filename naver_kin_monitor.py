@@ -191,8 +191,10 @@ def flush_to_sheet(worksheet, all_results, afternoon=False):
 
             # 중복 링크 처리 (docId 기준)
             doc_id = extract_doc_id(url) if url else None
+            is_duplicate = False
             if doc_id and doc_id in seen_doc_ids:
                 rank_text = "중복"
+                is_duplicate = True
                 duplicate_count += 1
                 logger.info(f"[중복 감지] '{entry['keyword']}' {idx+1}위 게시물 — docId={doc_id}")
             elif doc_id:
@@ -200,7 +202,13 @@ def flush_to_sheet(worksheet, all_results, afternoon=False):
 
             updates.append({"range": f"{rank_col}{row}", "values": [[rank_text]]})
 
-            if afternoon:
+            if is_duplicate:
+                # 중복: 나머지 필드는 빈칸
+                updates.append({"range": f"{link_col}{row}", "values": [[""]]})
+                updates.append({"range": f"{likes_col}{row}", "values": [[""]]})
+                updates.append({"range": f"{needed_col}{row}", "values": [[""]]})
+                updates.append({"range": f"{actual_col}{row}", "values": [[""]]})
+            elif afternoon:
                 # 오후: 순위 + 실제 작업수량(현재 따봉 갯수)만 기록
                 updates.append({
                     "range": f"{actual_col}{row}",
@@ -223,6 +231,58 @@ def flush_to_sheet(worksheet, all_results, afternoon=False):
         f"시트 업데이트 완료 — {len(all_results)}개 키워드, "
         f"중복 {duplicate_count}건"
     )
+
+
+def save_links_to_txt(all_results):
+    """따봉 신청 갯수(needed_likes)별로 링크를 그룹화하여 메모장에 저장합니다.
+
+    - 중복 URL(docId 기준)은 제외
+    - 오름차순 정렬 (10개, 15개, 20개 ...)
+    """
+    seen_doc_ids = set()
+    links_by_needed = {}  # {needed_likes: [url, ...]}
+
+    for entry in all_results:
+        for item in entry["results"]:
+            url = item.get("url", "")
+            needed = item.get("needed_likes")
+            if not url or needed is None:
+                continue
+
+            # 중복 제거 (docId 기준)
+            match = re.search(r'docId=(\d+)', url)
+            if match:
+                doc_id = match.group(1)
+                if doc_id in seen_doc_ids:
+                    continue
+                seen_doc_ids.add(doc_id)
+
+            links_by_needed.setdefault(needed, []).append(url)
+
+    if not links_by_needed:
+        logger.info("따봉 신청 링크 없음 — 메모장 생성 건너뜀")
+        return
+
+    # 오름차순 정렬
+    sorted_counts = sorted(links_by_needed.keys())
+
+    now_str = datetime.now(KST).strftime("%Y-%m-%d_%H%M")
+    txt_path = BASE_DIR / f"links_{now_str}.txt"
+
+    lines = []
+    lines.append(f"따봉 신청 링크 정리 ({datetime.now(KST).strftime('%Y-%m-%d %H:%M')} KST)")
+    lines.append("=" * 50)
+
+    for count in sorted_counts:
+        urls = links_by_needed[count]
+        lines.append("")
+        lines.append(f"{count}개 (따봉 신청 갯수)")
+        for url in urls:
+            lines.append(url)
+
+    content = "\n".join(lines) + "\n"
+    txt_path.write_text(content, encoding="utf-8")
+    logger.info(f"링크 메모장 저장 완료: {txt_path.name}")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -693,6 +753,10 @@ async def main():
     logger.info("탐색 완료 — 중복 검사 및 시트 기록 시작")
     logger.info("─" * 40)
     flush_to_sheet(worksheet, all_results, afternoon=afternoon)
+
+    # 5-1) 오전 실행 시 따봉 신청 갯수별 링크를 메모장에 저장
+    if not afternoon:
+        save_links_to_txt(all_results)
 
     # 6) 완료 리포트
     logger.info("\n" + "=" * 60)
