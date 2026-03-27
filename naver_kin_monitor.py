@@ -209,19 +209,19 @@ def flush_to_sheet(worksheet, all_results, afternoon=False):
                 updates.append({"range": f"{needed_col}{row}", "values": [[""]]})
                 updates.append({"range": f"{actual_col}{row}", "values": [[""]]})
             elif afternoon:
-                # 오후: 순위 + 실제 작업수량(현재 따봉 갯수)만 기록
-                updates.append({
-                    "range": f"{actual_col}{row}",
-                    "values": [[likes if likes is not None else ""]],
-                })
-            else:
-                # 오전: 순위 + 링크 + 따봉 갯수 + 요청 갯수
+                # 오후: 순위 + 링크 + 따봉 갯수 + 요청 갯수
                 updates.append({"range": f"{link_col}{row}", "values": [[url]]})
                 # likes가 None이면 0으로 기록 (네이버는 따봉 0개일 때 미표시)
                 updates.append({"range": f"{likes_col}{row}", "values": [[likes if likes is not None else 0]]})
                 updates.append({
                     "range": f"{needed_col}{row}",
                     "values": [[needed_likes if needed_likes is not None else ""]],
+                })
+            else:
+                # 오전: 순위 + 실제 작업수량(현재 따봉 갯수)만 기록
+                updates.append({
+                    "range": f"{actual_col}{row}",
+                    "values": [[likes if likes is not None else ""]],
                 })
 
     if updates:
@@ -678,7 +678,7 @@ async def process_keyword(page, row_number, keyword):
 async def main():
     """메인 실행 함수"""
     afternoon = is_afternoon()
-    mode_label = "오후 (실제 작업수량 기록)" if afternoon else "오전 (요청 갯수 기록)"
+    mode_label = "오후 (요청 갯수 기록)" if afternoon else "오전 (실제 작업수량 기록)"
     now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
 
     logger.info("=" * 60)
@@ -781,8 +781,8 @@ async def main():
     logger.info("─" * 40)
     flush_to_sheet(worksheet, all_results, afternoon=afternoon)
 
-    # 5-1) 오전 실행 시 따봉 신청 갯수별 링크를 메모장에 저장
-    if not afternoon:
+    # 5-1) 오후 실행 시 따봉 신청 갯수별 링크를 메모장에 저장
+    if afternoon:
         save_links_to_txt(all_results)
 
     # 6) 완료 리포트
