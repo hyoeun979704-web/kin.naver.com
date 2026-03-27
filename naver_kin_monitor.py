@@ -217,8 +217,8 @@ def flush_to_sheet(worksheet, all_results, afternoon=False):
             else:
                 # 오전: 순위 + 링크 + 따봉 갯수 + 요청 갯수
                 updates.append({"range": f"{link_col}{row}", "values": [[url]]})
-                if likes is not None:
-                    updates.append({"range": f"{likes_col}{row}", "values": [[likes]]})
+                # likes가 None이면 0으로 기록 (네이버는 따봉 0개일 때 미표시)
+                updates.append({"range": f"{likes_col}{row}", "values": [[likes if likes is not None else 0]]})
                 updates.append({
                     "range": f"{needed_col}{row}",
                     "values": [[needed_likes if needed_likes is not None else ""]],
@@ -550,9 +550,10 @@ def calc_needed_likes(top1_likes, target_likes):
     Returns:
         int or None: 필요한 따봉 갯수 (이미 1위이거나 데이터 없으면 None)
     """
-    if top1_likes is None or target_likes is None:
-        return None
-    raw = top1_likes - target_likes + 1
+    # None은 0으로 처리 (네이버는 따봉 0개일 때 카운터 미표시)
+    effective_top1 = top1_likes if top1_likes is not None else 0
+    effective_target = target_likes if target_likes is not None else 0
+    raw = effective_top1 - effective_target + 1
     if raw <= 0:
         return None  # 이미 1위 따봉 수 이상
     # 5 단위 올림, 최소 10
