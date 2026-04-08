@@ -167,11 +167,11 @@ def load_keywords_from_sheet(worksheet, col=None, start_row=None):
     return entries
 
 
-def flush_to_sheet(worksheet, all_results, col_groups=None):
+def flush_to_sheet(worksheet, all_results, col_groups=None, full_record=True):
     """전체 결과에서 중복 URL을 처리하고 시트의 해당 행 셀을 일괄 업데이트합니다.
 
-    매 실행마다 모든 열을 기록합니다:
-      순위 + 링크 + 현재 따봉 갯수 + 요청 갯수 + 실제 작업수량
+    full_record=True  (오전): 순위 + 링크 + 현재 따봉 갯수 + 요청 갯수 + 실제 작업수량
+    full_record=False (오후): 순위 + 링크 + 실제 작업수량만
     """
     if col_groups is None:
         col_groups = [
@@ -224,13 +224,15 @@ def flush_to_sheet(worksheet, all_results, col_groups=None):
                 updates.append({"range": f"{needed_col}{row}", "values": [[""]]})
                 updates.append({"range": f"{actual_col}{row}", "values": [[""]]})
             else:
-                # 순위 + 링크 + 현재 따봉 갯수 + 요청 갯수 + 실제 작업수량
                 updates.append({"range": f"{link_col}{row}", "values": [[url]]})
-                updates.append({"range": f"{likes_col}{row}", "values": [[likes if likes is not None else 0]]})
-                updates.append({
-                    "range": f"{needed_col}{row}",
-                    "values": [[needed_likes if needed_likes is not None else ""]],
-                })
+                if full_record:
+                    # 오전: 순위 + 링크 + 현재 따봉 갯수 + 요청 갯수 + 실제 작업수량
+                    updates.append({"range": f"{likes_col}{row}", "values": [[likes if likes is not None else 0]]})
+                    updates.append({
+                        "range": f"{needed_col}{row}",
+                        "values": [[needed_likes if needed_likes is not None else ""]],
+                    })
+                # 항상 실제 작업수량 기록
                 updates.append({
                     "range": f"{actual_col}{row}",
                     "values": [[likes if likes is not None else 0]],
@@ -859,11 +861,14 @@ async def process_tracking_sheet(page, worksheet, run_hour):
 async def main():
     """메인 실행 함수 — 지식인 / 메인페이지 / 아정당 밀착마크 3개 시트를 처리합니다."""
     run_hour = datetime.now(KST).hour
+    full_record = run_hour < 13  # 오후 1시 이전: 전체 기록 / 이후: 순위+링크+실제작업만
     now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+    mode_label = "전체 기록" if full_record else "순위+링크+실제작업"
 
     logger.info("=" * 60)
     logger.info("네이버 지식인 모니터링 봇 시작")
     logger.info(f"실행 시각: {now_kst} (KST)")
+    logger.info(f"기록 모드: {mode_label}")
     logger.info(f"타겟 답변자: {', '.join(TARGET_ANSWERERS)}")
     logger.info("=" * 60)
 
@@ -961,12 +966,14 @@ async def main():
     logger.info("─" * 40)
 
     if kin_results:
-        flush_to_sheet(kin_ws, kin_results)
+        flush_to_sheet(kin_ws, kin_results, full_record=full_record)
     if main_results:
-        flush_to_sheet(main_ws, main_results, col_groups=MAIN_COL_GROUPS)
+        flush_to_sheet(main_ws, main_results, col_groups=MAIN_COL_GROUPS,
+                       full_record=full_record)
 
-    # 8) 따봉 신청 갯수별 링크를 메모장에 저장
-    save_links_to_txt(kin_results + main_results)
+    # 8) 오전에만 따봉 신청 갯수별 링크를 메모장에 저장
+    if full_record:
+        save_links_to_txt(kin_results + main_results)
 
     # 9) 완료 리포트
     total_keywords = len(kin_keywords) + len(main_keywords)
