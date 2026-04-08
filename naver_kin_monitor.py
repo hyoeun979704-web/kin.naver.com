@@ -52,13 +52,8 @@ from config import (
     KEYWORDS,
 )
 
-# ─── 한국 시간(KST) 기준 오전/오후 판단 ───
+# ─── 한국 시간(KST) ───
 KST = timezone(timedelta(hours=9))
-
-
-def is_afternoon():
-    """한국 시간 12시 이후이면 오후(True)를 반환합니다."""
-    return datetime.now(KST).hour >= 12
 
 # ─── 로깅 설정 ───
 logging.basicConfig(
@@ -147,17 +142,11 @@ def load_keywords_from_sheet(worksheet):
     return entries
 
 
-def flush_to_sheet(worksheet, all_results, afternoon=False):
+def flush_to_sheet(worksheet, all_results):
     """전체 결과에서 중복 URL을 처리하고 시트의 해당 행 셀을 일괄 업데이트합니다.
 
-    오전 실행: 요청 따봉 갯수(F/M열)에 기록
-    오후 실행: 실제 작업수량(G/N열)에 기록
-
-    쓰기 대상 열:
-      B(RANK_COL_1): 1위 게시물 현재 순위
-      C(LINK_COL_1): 1위 게시물 답변 링크
-      I(RANK_COL_2): 2위 게시물 현재 순위
-      J(LINK_COL_2): 2위 게시물 답변 링크
+    매 실행마다 모든 열을 기록합니다:
+      순위 + 링크 + 현재 따봉 갯수 + 요청 갯수 + 실제 작업수량
     """
     seen_doc_ids = set()
     duplicate_count = 0
@@ -208,20 +197,17 @@ def flush_to_sheet(worksheet, all_results, afternoon=False):
                 updates.append({"range": f"{likes_col}{row}", "values": [[""]]})
                 updates.append({"range": f"{needed_col}{row}", "values": [[""]]})
                 updates.append({"range": f"{actual_col}{row}", "values": [[""]]})
-            elif afternoon:
-                # 오후: 순위 + 링크 + 따봉 갯수 + 요청 갯수
+            else:
+                # 순위 + 링크 + 현재 따봉 갯수 + 요청 갯수 + 실제 작업수량
                 updates.append({"range": f"{link_col}{row}", "values": [[url]]})
-                # likes가 None이면 0으로 기록 (네이버는 따봉 0개일 때 미표시)
                 updates.append({"range": f"{likes_col}{row}", "values": [[likes if likes is not None else 0]]})
                 updates.append({
                     "range": f"{needed_col}{row}",
                     "values": [[needed_likes if needed_likes is not None else ""]],
                 })
-            else:
-                # 오전: 순위 + 실제 작업수량(현재 따봉 갯수)만 기록
                 updates.append({
                     "range": f"{actual_col}{row}",
-                    "values": [[likes if likes is not None else ""]],
+                    "values": [[likes if likes is not None else 0]],
                 })
 
     if updates:
@@ -677,14 +663,11 @@ async def process_keyword(page, row_number, keyword):
 
 async def main():
     """메인 실행 함수"""
-    afternoon = is_afternoon()
-    mode_label = "오후 (요청 갯수 기록)" if afternoon else "오전 (실제 작업수량 기록)"
     now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
 
     logger.info("=" * 60)
     logger.info("네이버 지식인 모니터링 봇 시작")
     logger.info(f"실행 시각: {now_kst} (KST)")
-    logger.info(f"실행 모드: {mode_label}")
     logger.info(f"타겟 답변자: {', '.join(TARGET_ANSWERERS)}")
     logger.info("=" * 60)
 
@@ -779,11 +762,10 @@ async def main():
     logger.info("\n" + "─" * 40)
     logger.info("탐색 완료 — 중복 검사 및 시트 기록 시작")
     logger.info("─" * 40)
-    flush_to_sheet(worksheet, all_results, afternoon=afternoon)
+    flush_to_sheet(worksheet, all_results)
 
-    # 5-1) 오후 실행 시 따봉 신청 갯수별 링크를 메모장에 저장
-    if afternoon:
-        save_links_to_txt(all_results)
+    # 5-1) 따봉 신청 갯수별 링크를 메모장에 저장
+    save_links_to_txt(all_results)
 
     # 6) 완료 리포트
     logger.info("\n" + "=" * 60)

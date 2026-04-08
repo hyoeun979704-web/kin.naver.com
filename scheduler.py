@@ -13,7 +13,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 KST = timezone(timedelta(hours=9))
 
-SCHEDULE_HOURS = [9, 14]  # 09:00, 14:00 KST
+SCHEDULE_HOURS = [9, 12, 15, 17]  # 09:00, 12:00, 15:00, 17:00 KST
 
 
 def now_kst():
