@@ -50,6 +50,17 @@ from config import (
     NEEDED_LIKES_COL_2,
     ACTUAL_LIKES_COL_2,
     KEYWORDS,
+    # 메인페이지 시트
+    MAIN_PAGE_WORKSHEET_INDEX,
+    MAIN_PAGE_KEYWORDS_START_ROW,
+    MAIN_PAGE_TOP_N,
+    MAIN_COL_GROUPS,
+    # 아정당 밀착마크 시트
+    TRACKING_WORKSHEET_INDEX,
+    TRACKING_DATA_START_ROW,
+    TRACKING_LINK_COL,
+    TRACKING_DATE_COL,
+    TRACKING_TIME_COLUMNS,
 )
 
 # ─── 한국 시간(KST) ───
@@ -123,31 +134,51 @@ def get_google_sheet():
     return worksheet
 
 
-def load_keywords_from_sheet(worksheet):
-    """구글 시트 A열에서 키워드와 행 번호를 함께 반환합니다.
+def get_spreadsheet():
+    """구글 스프레드시트 객체를 반환합니다."""
+    creds = _load_credentials()
+    client = gspread.authorize(creds)
+    spreadsheet = client.open_by_key(SPREADSHEET_KEY)
+    logger.info(f"구글 시트 연결 완료: {spreadsheet.title}")
+    return spreadsheet
+
+
+def load_keywords_from_sheet(worksheet, col=None, start_row=None):
+    """시트에서 키워드와 행 번호를 함께 반환합니다.
 
     Returns:
         list[tuple]: [(row_number, keyword), ...]
     """
-    col_idx = col_letter_to_index(KEYWORDS_COLUMN)
+    if col is None:
+        col = KEYWORDS_COLUMN
+    if start_row is None:
+        start_row = KEYWORDS_START_ROW
+
+    col_idx = col_letter_to_index(col)
     col_values = worksheet.col_values(col_idx)
 
     entries = []
-    for i, val in enumerate(col_values[KEYWORDS_START_ROW - 1:], start=KEYWORDS_START_ROW):
+    for i, val in enumerate(col_values[start_row - 1:], start=start_row):
         kw = val.strip()
         if kw:
             entries.append((i, kw))
 
-    logger.info(f"시트에서 {len(entries)}개 키워드 로드 완료")
+    logger.info(f"시트 '{worksheet.title}'에서 {len(entries)}개 키워드 로드 완료")
     return entries
 
 
-def flush_to_sheet(worksheet, all_results):
+def flush_to_sheet(worksheet, all_results, col_groups=None):
     """전체 결과에서 중복 URL을 처리하고 시트의 해당 행 셀을 일괄 업데이트합니다.
 
     매 실행마다 모든 열을 기록합니다:
       순위 + 링크 + 현재 따봉 갯수 + 요청 갯수 + 실제 작업수량
     """
+    if col_groups is None:
+        col_groups = [
+            (RANK_COL_1, LINK_COL_1, LIKES_COL_1, NEEDED_LIKES_COL_1, ACTUAL_LIKES_COL_1),
+            (RANK_COL_2, LINK_COL_2, LIKES_COL_2, NEEDED_LIKES_COL_2, ACTUAL_LIKES_COL_2),
+        ]
+
     seen_doc_ids = set()
     duplicate_count = 0
 
@@ -161,14 +192,9 @@ def flush_to_sheet(worksheet, all_results):
 
     for entry in all_results:
         row = entry["row"]
-        results = entry["results"]  # 최대 2개: [1위 게시물, 2위 게시물]
+        results = entry["results"]
 
-        col_pairs = [
-            (RANK_COL_1, LINK_COL_1, LIKES_COL_1, NEEDED_LIKES_COL_1, ACTUAL_LIKES_COL_1),
-            (RANK_COL_2, LINK_COL_2, LIKES_COL_2, NEEDED_LIKES_COL_2, ACTUAL_LIKES_COL_2),
-        ]
-
-        for idx, (rank_col, link_col, likes_col, needed_col, actual_col) in enumerate(col_pairs):
+        for idx, (rank_col, link_col, likes_col, needed_col, actual_col) in enumerate(col_groups):
             if idx >= len(results):
                 break
 
@@ -362,6 +388,50 @@ async def search_naver_kin(page, keyword):
     return results
 
 
+async def search_naver_main_feed(page, keyword):
+    """네이버 통합검색(search.naver.com)에서 지식인 질문 링크를 추출합니다.
+
+    Returns:
+        list[dict]: [{"rank": 1, "url": "...", "title": "..."}, ...]
+    """
+    encoded_keyword = quote_plus(keyword)
+    search_url = (
+        f"https://search.naver.com/search.naver"
+        f"?where=nexearch&query={encoded_keyword}"
+    )
+
+    logger.info(f"통합검색 중: '{keyword}'")
+    await page.goto(search_url, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT)
+    await random_delay()
+
+    results = []
+    # 페이지 내 지식인 질문 링크를 모두 추출
+    kin_links = await page.query_selector_all("a[href*='kin.naver.com/qna/detail']")
+
+    seen_urls = set()
+    for link_el in kin_links:
+        if len(results) >= MAIN_PAGE_TOP_N:
+            break
+        try:
+            href = await link_el.get_attribute("href")
+            if not href or href in seen_urls:
+                continue
+            seen_urls.add(href)
+            title = (await link_el.inner_text()).strip()
+            if not title:
+                continue
+            results.append({
+                "rank": len(results) + 1,
+                "url": href,
+                "title": title[:50],
+            })
+        except Exception:
+            continue
+
+    logger.info(f"'{keyword}' 통합검색 결과 {len(results)}개 지식인 질문 추출")
+    return results
+
+
 async def check_answerer_rank(page, question_url, target_name):
     """질문 페이지에 접속하여 타겟 답변자의 순위를 확인합니다.
 
@@ -547,7 +617,7 @@ def calc_needed_likes(top1_likes, target_likes):
     return max(rounded, 10)
 
 
-async def process_keyword(page, row_number, keyword):
+async def process_keyword(page, row_number, keyword, search_func=None, top_n=None):
     """하나의 키워드에 대한 전체 처리 흐름을 실행합니다.
 
     Returns:
@@ -557,7 +627,12 @@ async def process_keyword(page, row_number, keyword):
             "results": list[dict],  # [{"rank_text": ..., "url": ...}, ...]
         }
     """
-    search_results = await search_naver_kin(page, keyword)
+    if search_func is None:
+        search_func = search_naver_kin
+    if top_n is None:
+        top_n = TOP_N_RESULTS
+
+    search_results = await search_func(page, keyword)
 
     if not search_results:
         logger.warning(f"'{keyword}' 검색 결과 없음")
@@ -565,8 +640,8 @@ async def process_keyword(page, row_number, keyword):
             "row": row_number,
             "keyword": keyword,
             "results": [
-                {"rank_text": "검색결과없음", "url": "", "likes": None, "needed_likes": None},
-                {"rank_text": "검색결과없음", "url": "", "likes": None, "needed_likes": None},
+                {"rank_text": "검색결과없음", "url": "", "likes": None, "needed_likes": None}
+                for _ in range(top_n)
             ],
         }
 
@@ -650,8 +725,8 @@ async def process_keyword(page, row_number, keyword):
             "needed_likes": needed_likes,
         })
 
-    # 결과가 TOP_N_RESULTS보다 적을 경우 패딩
-    while len(result_items) < TOP_N_RESULTS:
+    # 결과가 top_n보다 적을 경우 패딩
+    while len(result_items) < top_n:
         result_items.append({"rank_text": "", "url": "", "likes": None, "needed_likes": None})
 
     return {
@@ -661,8 +736,129 @@ async def process_keyword(page, row_number, keyword):
     }
 
 
+async def run_keyword_batch(keyword_entries, browser, context, page,
+                            search_func=None, top_n=None, label=""):
+    """키워드 배치를 처리하고 결과를 반환합니다.
+
+    UA 교체로 인해 context/page가 변경될 수 있으므로 최신 값을 반환합니다.
+
+    Returns:
+        tuple: (all_results, success_count, fail_count, context, page)
+    """
+    all_results = []
+    success_count = 0
+    fail_count = 0
+
+    for i, (row_number, keyword) in enumerate(keyword_entries, 1):
+        logger.info(f"\n{'─' * 40}")
+        logger.info(f"[{label}] [{i}/{len(keyword_entries)}] 행{row_number} '{keyword}'")
+        logger.info(f"{'─' * 40}")
+
+        try:
+            result = await process_keyword(page, row_number, keyword, search_func, top_n)
+            all_results.append(result)
+            success_count += 1
+        except Exception as e:
+            logger.error(f"'{keyword}' 처리 중 오류: {e}")
+            fail_count += 1
+
+        # 키워드 간 딜레이
+        if i < len(keyword_entries):
+            delay = random.uniform(MIN_DELAY + 1, MAX_DELAY + 2)
+            logger.info(f"다음 키워드까지 {delay:.1f}초 대기...")
+            await asyncio.sleep(delay)
+
+        # 10개마다 User-Agent 교체
+        if i % 10 == 0:
+            new_ua = get_random_user_agent()
+            logger.info("User-Agent 변경")
+            await context.close()
+            context = await browser.new_context(
+                user_agent=new_ua,
+                viewport={"width": 1366, "height": 768},
+                locale="ko-KR",
+                timezone_id="Asia/Seoul",
+            )
+            await context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            """)
+            page = await context.new_page()
+
+    return all_results, success_count, fail_count, context, page
+
+
+async def process_tracking_sheet(page, worksheet, run_hour):
+    """아정당 밀착마크 시트의 링크를 방문하여 답변 순위를 기록합니다.
+
+    Args:
+        page: Playwright 페이지 객체
+        worksheet: 아정당 밀착마크 워크시트
+        run_hour: 실행 시작 시간 (시)
+    """
+    # 실행 시간에 해당하는 열 결정
+    time_col = TRACKING_TIME_COLUMNS.get(run_hour)
+    if time_col is None:
+        for h in sorted(TRACKING_TIME_COLUMNS.keys(), reverse=True):
+            if run_hour >= h:
+                time_col = TRACKING_TIME_COLUMNS[h]
+                break
+        if time_col is None:
+            time_col = list(TRACKING_TIME_COLUMNS.values())[0]
+
+    logger.info(f"\n{'═' * 60}")
+    logger.info(f"【아정당 밀착마크】처리 시작 (→ {time_col}열)")
+    logger.info(f"{'═' * 60}")
+
+    # C열에서 링크 읽기
+    link_col_idx = col_letter_to_index(TRACKING_LINK_COL)
+    col_values = worksheet.col_values(link_col_idx)
+
+    updates = []
+    today_str = datetime.now(KST).strftime("%y%m%d")
+    processed = 0
+
+    for i, val in enumerate(col_values[TRACKING_DATA_START_ROW - 1:], start=TRACKING_DATA_START_ROW):
+        url = val.strip()
+        if not url:
+            continue
+
+        # URL이 완전하지 않으면 보완
+        if not url.startswith("http"):
+            url = "https://kin.naver.com/qna/detail.naver?" + url
+
+        logger.info(f"[밀착마크] 행{i} 순위 확인 중...")
+
+        try:
+            best_rank = None
+            for answerer in TARGET_ANSWERERS:
+                rank_info = await check_answerer_rank(page, url, answerer)
+                if rank_info["rank"] is not None:
+                    if best_rank is None or rank_info["rank"] < best_rank:
+                        best_rank = rank_info["rank"]
+
+            rank_text = str(best_rank) if best_rank else "없음"
+        except PlaywrightTimeout:
+            logger.error(f"[밀착마크] 행{i} 타임아웃")
+            rank_text = "타임아웃"
+        except Exception as e:
+            logger.error(f"[밀착마크] 행{i} 오류: {e}")
+            rank_text = "오류"
+
+        updates.append({"range": f"{time_col}{i}", "values": [[rank_text]]})
+        updates.append({"range": f"{TRACKING_DATE_COL}{i}", "values": [[today_str]]})
+        processed += 1
+
+        await random_delay()
+
+    if updates:
+        worksheet.batch_update(updates, value_input_option="USER_ENTERED")
+
+    logger.info(f"아정당 밀착마크 시트 업데이트 완료 — {processed}개 링크 처리")
+
+
 async def main():
-    """메인 실행 함수"""
+    """메인 실행 함수 — 지식인 / 메인페이지 / 아정당 밀착마크 3개 시트를 처리합니다."""
+    run_hour = datetime.now(KST).hour
     now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
 
     logger.info("=" * 60)
@@ -671,27 +867,37 @@ async def main():
     logger.info(f"타겟 답변자: {', '.join(TARGET_ANSWERERS)}")
     logger.info("=" * 60)
 
-    # 1) 구글 시트 연결
+    # 1) 구글 스프레드시트 연결 — 3개 시트 모두 가져오기
     try:
-        worksheet = get_google_sheet()
+        spreadsheet = get_spreadsheet()
+        kin_ws = spreadsheet.get_worksheet(WORKSHEET_INDEX)
+        main_ws = spreadsheet.get_worksheet(MAIN_PAGE_WORKSHEET_INDEX)
+        track_ws = spreadsheet.get_worksheet(TRACKING_WORKSHEET_INDEX)
+        logger.info(
+            f"시트 로드 완료: {kin_ws.title} / {main_ws.title} / {track_ws.title}"
+        )
     except Exception as e:
         logger.error(f"구글 시트 연결 실패: {e}")
         logger.error("credentials.json 파일과 시트 공유 설정을 확인하세요.")
         sys.exit(1)
 
-    # 2) 키워드 로드 (행 번호 포함)
+    # 2) 키워드 로드
     if USE_SHEET_KEYWORDS:
-        keyword_entries = load_keywords_from_sheet(worksheet)
+        kin_keywords = load_keywords_from_sheet(kin_ws)
     else:
-        keyword_entries = [
+        kin_keywords = [
             (KEYWORDS_START_ROW + i, kw) for i, kw in enumerate(KEYWORDS)
         ]
+    main_keywords = load_keywords_from_sheet(
+        main_ws, start_row=MAIN_PAGE_KEYWORDS_START_ROW
+    )
 
-    if not keyword_entries:
-        logger.error("키워드가 없습니다. config.py 또는 시트를 확인하세요.")
-        sys.exit(1)
+    logger.info(
+        f"키워드: 지식인 {len(kin_keywords)}개 / 메인페이지 {len(main_keywords)}개"
+    )
 
-    logger.info(f"총 {len(keyword_entries)}개 키워드 처리 예정")
+    total_success = 0
+    total_fail = 0
 
     # 3) Playwright 브라우저 시작
     async with async_playwright() as pw:
@@ -716,61 +922,57 @@ async def main():
 
         page = await context.new_page()
 
-        # 4) 키워드별 처리 — 결과를 메모리에 수집
-        all_results = []
-        success_count = 0
-        fail_count = 0
+        # 4) 지식인 시트 처리 (kin.naver.com 검색)
+        kin_results = []
+        if kin_keywords:
+            logger.info(f"\n{'═' * 60}")
+            logger.info("【지식인 시트】처리 시작")
+            logger.info(f"{'═' * 60}")
+            kin_results, s, f, context, page = await run_keyword_batch(
+                kin_keywords, browser, context, page,
+                search_func=search_naver_kin, top_n=TOP_N_RESULTS,
+                label="지식인",
+            )
+            total_success += s
+            total_fail += f
 
-        for i, (row_number, keyword) in enumerate(keyword_entries, 1):
-            logger.info(f"\n{'─' * 40}")
-            logger.info(f"[{i}/{len(keyword_entries)}] 행{row_number} '{keyword}'")
-            logger.info(f"{'─' * 40}")
+        # 5) 메인페이지 시트 처리 (search.naver.com 통합검색)
+        main_results = []
+        if main_keywords:
+            logger.info(f"\n{'═' * 60}")
+            logger.info("【메인페이지 시트】처리 시작")
+            logger.info(f"{'═' * 60}")
+            main_results, s, f, context, page = await run_keyword_batch(
+                main_keywords, browser, context, page,
+                search_func=search_naver_main_feed, top_n=MAIN_PAGE_TOP_N,
+                label="메인페이지",
+            )
+            total_success += s
+            total_fail += f
 
-            try:
-                result = await process_keyword(page, row_number, keyword)
-                all_results.append(result)
-                success_count += 1
-            except Exception as e:
-                logger.error(f"'{keyword}' 처리 중 오류: {e}")
-                fail_count += 1
-
-            # 키워드 간 딜레이
-            if i < len(keyword_entries):
-                delay = random.uniform(MIN_DELAY + 1, MAX_DELAY + 2)
-                logger.info(f"다음 키워드까지 {delay:.1f}초 대기...")
-                await asyncio.sleep(delay)
-
-            # 10개마다 User-Agent 교체
-            if i % 10 == 0:
-                new_ua = get_random_user_agent()
-                logger.info(f"User-Agent 변경")
-                await context.close()
-                context = await browser.new_context(
-                    user_agent=new_ua,
-                    viewport={"width": 1366, "height": 768},
-                    locale="ko-KR",
-                    timezone_id="Asia/Seoul",
-                )
-                await context.add_init_script("""
-                    Object.defineProperty(navigator, 'webdriver', { get: () => false });
-                """)
-                page = await context.new_page()
+        # 6) 아정당 밀착마크 시트 처리 (기존 링크 방문 → 순위 기록)
+        await process_tracking_sheet(page, track_ws, run_hour)
 
         await browser.close()
 
-    # 5) 중복 처리 후 시트에 일괄 업데이트
+    # 7) 시트별 결과 일괄 기록
     logger.info("\n" + "─" * 40)
     logger.info("탐색 완료 — 중복 검사 및 시트 기록 시작")
     logger.info("─" * 40)
-    flush_to_sheet(worksheet, all_results)
 
-    # 5-1) 따봉 신청 갯수별 링크를 메모장에 저장
-    save_links_to_txt(all_results)
+    if kin_results:
+        flush_to_sheet(kin_ws, kin_results)
+    if main_results:
+        flush_to_sheet(main_ws, main_results, col_groups=MAIN_COL_GROUPS)
 
-    # 6) 완료 리포트
+    # 8) 따봉 신청 갯수별 링크를 메모장에 저장
+    save_links_to_txt(kin_results + main_results)
+
+    # 9) 완료 리포트
+    total_keywords = len(kin_keywords) + len(main_keywords)
     logger.info("\n" + "=" * 60)
     logger.info("모니터링 완료!")
-    logger.info(f"성공: {success_count} / 실패: {fail_count} / 전체: {len(keyword_entries)}")
+    logger.info(f"성공: {total_success} / 실패: {total_fail} / 전체: {total_keywords}")
     logger.info("=" * 60)
 
 
