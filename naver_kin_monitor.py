@@ -486,8 +486,8 @@ async def check_answerer_rank(page, question_url, target_name):
             "div.answer_area"
         )
 
-    # 답변자별 (이름, 따봉수, 답변번호) 수집
-    answerer_data = []  # [(name, likes, answer_no), ...]
+    # 답변자별 (이름, 따봉수, 답변번호, 경력텍스트) 수집
+    answerer_data = []  # [(name, likes, answer_no, career_raw), ...]
     for item in answer_items:
         try:
             # 답변 번호 추출 — id="answer_13" → "13"
@@ -500,11 +500,13 @@ async def check_answerer_rank(page, question_url, target_name):
 
             # 답변자 이름 — career_list span에서 해시태그 파싱
             name = None
+            career_raw = ""  # 전체 경력 텍스트 (닉네임 매칭용)
 
             # 방법1: career_list span에서 "#닉네임" 추출
             career_el = await item.query_selector(".career_list span")
             if career_el:
                 career_text = (await career_el.inner_text()).strip()
+                career_raw = career_text  # 전체 텍스트 보존
                 # "#16600240 #입주청소 #새집느낌" → 마지막 해시태그가 닉네임
                 parts = [p.strip() for p in career_text.split("#") if p.strip()]
                 if parts:
@@ -548,7 +550,7 @@ async def check_answerer_rank(page, question_url, target_name):
                         likes = int(likes_text)
                         break
 
-            answerer_data.append((name, likes, answer_no))
+            answerer_data.append((name, likes, answer_no, career_raw))
             logger.debug(f"  답변자 발견: {name}, 따봉: {likes}, answerNo: {answer_no}")
         except Exception:
             continue
@@ -556,10 +558,10 @@ async def check_answerer_rank(page, question_url, target_name):
     # 중복 이름 제거 (순서 유지, 첫 등장 기준)
     seen = set()
     unique_data = []
-    for name, likes, answer_no in answerer_data:
+    for name, likes, answer_no, career_raw in answerer_data:
         if name not in seen:
             seen.add(name)
-            unique_data.append((name, likes, answer_no))
+            unique_data.append((name, likes, answer_no, career_raw))
 
     total = len(unique_data)
     top1 = unique_data[0][0] if unique_data else "확인불가"
@@ -568,8 +570,9 @@ async def check_answerer_rank(page, question_url, target_name):
     target_rank = None
     target_likes = None
     target_answer_no = None
-    for idx, (name, likes, answer_no) in enumerate(unique_data):
-        if target_name in name:
+    for idx, (name, likes, answer_no, career_raw) in enumerate(unique_data):
+        # 닉네임 또는 경력 텍스트(해시태그 전체)에서 매칭
+        if target_name in name or target_name in career_raw:
             target_rank = idx + 1
             target_likes = likes
             target_answer_no = answer_no
@@ -655,13 +658,15 @@ async def process_keyword(page, row_number, keyword, search_func=None, top_n=Non
         await random_delay()
 
         try:
-            # 여러 타겟 답변자 중 가장 높은 순위를 찾음
+            # 여러 타겟 답변자 중 따봉 갯수가 가장 많은 답변을 선택
             best_rank_info = None
             matched_answerer = None
             for answerer in TARGET_ANSWERERS:
                 rank_info = await check_answerer_rank(page, url, answerer)
                 if rank_info["rank"] is not None:
-                    if best_rank_info is None or rank_info["rank"] < best_rank_info["rank"]:
+                    cur_likes = rank_info["target_likes"] if rank_info["target_likes"] is not None else 0
+                    best_likes = best_rank_info["target_likes"] if best_rank_info and best_rank_info["target_likes"] is not None else -1
+                    if best_rank_info is None or cur_likes > best_likes:
                         best_rank_info = rank_info
                         matched_answerer = answerer
 
@@ -831,14 +836,16 @@ async def process_tracking_sheet(page, worksheet, run_hour):
         logger.info(f"[밀착마크] 행{i} 순위 확인 중...")
 
         try:
-            best_rank = None
+            best_info = None
             for answerer in TARGET_ANSWERERS:
                 rank_info = await check_answerer_rank(page, url, answerer)
                 if rank_info["rank"] is not None:
-                    if best_rank is None or rank_info["rank"] < best_rank:
-                        best_rank = rank_info["rank"]
+                    cur_likes = rank_info["target_likes"] if rank_info["target_likes"] is not None else 0
+                    best_likes = best_info["target_likes"] if best_info and best_info["target_likes"] is not None else -1
+                    if best_info is None or cur_likes > best_likes:
+                        best_info = rank_info
 
-            rank_text = str(best_rank) if best_rank else "없음"
+            rank_text = str(best_info["rank"]) if best_info else "없음"
         except PlaywrightTimeout:
             logger.error(f"[밀착마크] 행{i} 타임아웃")
             rank_text = "타임아웃"
