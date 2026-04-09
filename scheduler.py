@@ -1,7 +1,7 @@
 """
 Naver Kin Monitor - Scheduler
 First run: execute immediately
-Then auto-run at 09:00 and 14:00 KST every day
+Then auto-run at 09:00, 12:00, 15:00, 17:00 KST every day
 """
 
 import subprocess

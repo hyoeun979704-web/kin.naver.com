@@ -124,16 +124,6 @@ def _load_credentials():
     sys.exit(1)
 
 
-def get_google_sheet():
-    """구글 시트 워크시트 객체를 반환합니다."""
-    creds = _load_credentials()
-    client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key(SPREADSHEET_KEY)
-    worksheet = spreadsheet.get_worksheet(WORKSHEET_INDEX)
-    logger.info(f"구글 시트 연결 완료: {spreadsheet.title} / {worksheet.title}")
-    return worksheet
-
-
 def get_spreadsheet():
     """구글 스프레드시트 객체를 반환합니다."""
     creds = _load_credentials()
@@ -434,20 +424,13 @@ async def search_naver_main_feed(page, keyword):
     return results
 
 
-async def check_answerer_rank(page, question_url, target_name):
-    """질문 페이지에 접속하여 타겟 답변자의 순위를 확인합니다.
+async def parse_question_page(page, question_url):
+    """질문 페이지에 접속하여 모든 답변자 데이터를 파싱합니다.
 
-    '채택 답변'이 있으면 그것이 1위로 고정됩니다.
-    '더보기' 버튼이 있으면 클릭하여 전체 답변을 확인합니다.
+    페이지를 한 번만 로드하고, '더보기' 버튼이 있으면 클릭하여 전체 답변을 수집합니다.
 
     Returns:
-        dict: {
-            "rank": int or None,
-            "is_top1": bool,
-            "total_answers": int,
-            "top1_answerer": str,
-            "target_likes": int or None,  # 타겟 답변자의 따봉 갯수
-        }
+        list[tuple]: [(name, likes, answer_no, career_raw), ...] 순위순
     """
     logger.info(f"질문 페이지 접속: {question_url}")
     await page.goto(question_url, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT)
@@ -563,14 +546,36 @@ async def check_answerer_rank(page, question_url, target_name):
             seen.add(name)
             unique_data.append((name, likes, answer_no, career_raw))
 
-    total = len(unique_data)
-    top1 = unique_data[0][0] if unique_data else "확인불가"
-    top1_likes = unique_data[0][1] if unique_data else None
+    logger.info(f"답변 파싱 완료 — 총 {len(unique_data)}명")
+    return unique_data
+
+
+def find_target_in_answers(answerer_list, target_name):
+    """파싱된 답변자 목록에서 타겟 답변자를 찾아 순위 정보를 반환합니다.
+
+    Args:
+        answerer_list: parse_question_page() 반환값 [(name, likes, answer_no, career_raw), ...]
+        target_name: 찾을 답변자 이름
+
+    Returns:
+        dict: {
+            "rank": int or None,
+            "is_top1": bool,
+            "total_answers": int,
+            "top1_answerer": str,
+            "top1_likes": int or None,
+            "target_likes": int or None,
+            "target_answer_no": str or None,
+        }
+    """
+    total = len(answerer_list)
+    top1 = answerer_list[0][0] if answerer_list else "확인불가"
+    top1_likes = answerer_list[0][1] if answerer_list else None
 
     target_rank = None
     target_likes = None
     target_answer_no = None
-    for idx, (name, likes, answer_no, career_raw) in enumerate(unique_data):
+    for idx, (name, likes, answer_no, career_raw) in enumerate(answerer_list):
         # 닉네임 또는 경력 텍스트(해시태그 전체)에서 매칭
         if target_name in name or target_name in career_raw:
             target_rank = idx + 1
@@ -578,7 +583,7 @@ async def check_answerer_rank(page, question_url, target_name):
             target_answer_no = answer_no
             break
 
-    result = {
+    return {
         "rank": target_rank,
         "is_top1": target_rank == 1,
         "total_answers": total,
@@ -587,14 +592,6 @@ async def check_answerer_rank(page, question_url, target_name):
         "target_likes": target_likes,
         "target_answer_no": target_answer_no,
     }
-
-    logger.info(
-        f"답변 분석 완료 - 총 {total}개, "
-        f"1위: {top1}, "
-        f"'{target_name}' 순위: {target_rank or '없음'}, "
-        f"따봉: {target_likes if target_likes is not None else '없음'}"
-    )
-    return result
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -658,11 +655,14 @@ async def process_keyword(page, row_number, keyword, search_func=None, top_n=Non
         await random_delay()
 
         try:
+            # 페이지를 한 번만 로드하고 모든 타겟 답변자를 검색
+            answerer_list = await parse_question_page(page, url)
+
             # 여러 타겟 답변자 중 따봉 갯수가 가장 많은 답변을 선택
             best_rank_info = None
             matched_answerer = None
             for answerer in TARGET_ANSWERERS:
-                rank_info = await check_answerer_rank(page, url, answerer)
+                rank_info = find_target_in_answers(answerer_list, answerer)
                 if rank_info["rank"] is not None:
                     cur_likes = rank_info["target_likes"] if rank_info["target_likes"] is not None else 0
                     best_likes = best_rank_info["target_likes"] if best_rank_info and best_rank_info["target_likes"] is not None else -1
@@ -836,9 +836,12 @@ async def process_tracking_sheet(page, worksheet, run_hour):
         logger.info(f"[밀착마크] 행{i} 순위 확인 중...")
 
         try:
+            # 페이지를 한 번만 로드하고 모든 타겟 답변자를 검색
+            answerer_list = await parse_question_page(page, url)
+
             best_info = None
             for answerer in TARGET_ANSWERERS:
-                rank_info = await check_answerer_rank(page, url, answerer)
+                rank_info = find_target_in_answers(answerer_list, answerer)
                 if rank_info["rank"] is not None:
                     cur_likes = rank_info["target_likes"] if rank_info["target_likes"] is not None else 0
                     best_likes = best_info["target_likes"] if best_info and best_info["target_likes"] is not None else -1
