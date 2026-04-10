@@ -462,12 +462,15 @@ async def parse_question_page(page, question_url):
     # ─── 답변 목록 파싱 ───
     answer_items = await page.query_selector_all("div._contentBox")
 
-    if not answer_items:
-        answer_items = await page.query_selector_all(
+    # 채택 답변만 잡히는 경우 대비: 답변이 1개 이하면 더 넓은 셀렉터로 재시도
+    if len(answer_items) <= 1:
+        alt_items = await page.query_selector_all(
             "div.contentBox, "
             ".answer-content__list > li, "
             "div.answer_area"
         )
+        if len(alt_items) > len(answer_items):
+            answer_items = alt_items
 
     # 답변자별 (이름, 따봉수, 답변번호, 경력텍스트) 수집
     answerer_data = []  # [(name, likes, answer_no, career_raw), ...]
@@ -576,8 +579,9 @@ def find_target_in_answers(answerer_list, target_name):
     target_likes = None
     target_answer_no = None
     for idx, (name, likes, answer_no, career_raw) in enumerate(answerer_list):
-        # 닉네임 또는 경력 텍스트(해시태그 전체)에서 매칭
-        if target_name in name or target_name in career_raw:
+        # 닉네임 정확 매칭 또는 해시태그 개별 정확 매칭
+        career_parts = [p.strip() for p in career_raw.split("#") if p.strip()]
+        if name == target_name or target_name in career_parts:
             target_rank = idx + 1
             target_likes = likes
             target_answer_no = answer_no
@@ -666,7 +670,9 @@ async def process_keyword(page, row_number, keyword, search_func=None, top_n=Non
                 if rank_info["rank"] is not None:
                     cur_likes = rank_info["target_likes"] if rank_info["target_likes"] is not None else 0
                     best_likes = best_rank_info["target_likes"] if best_rank_info and best_rank_info["target_likes"] is not None else -1
-                    if best_rank_info is None or cur_likes > best_likes:
+                    if (best_rank_info is None
+                            or cur_likes > best_likes
+                            or (cur_likes == best_likes and rank_info["rank"] < best_rank_info["rank"])):
                         best_rank_info = rank_info
                         matched_answerer = answerer
 
@@ -845,10 +851,13 @@ async def process_tracking_sheet(page, worksheet, run_hour):
                 if rank_info["rank"] is not None:
                     cur_likes = rank_info["target_likes"] if rank_info["target_likes"] is not None else 0
                     best_likes = best_info["target_likes"] if best_info and best_info["target_likes"] is not None else -1
-                    if best_info is None or cur_likes > best_likes:
+                    if (best_info is None
+                            or cur_likes > best_likes
+                            or (cur_likes == best_likes and rank_info["rank"] < best_info["rank"])):
                         best_info = rank_info
 
             rank_text = str(best_info["rank"]) if best_info else "없음"
+            logger.info(f"[밀착마크] 행{i} → {rank_text}위 (총 {answerer_list and len(answerer_list) or 0}명 답변)")
         except PlaywrightTimeout:
             logger.error(f"[밀착마크] 행{i} 타임아웃")
             rank_text = "타임아웃"
