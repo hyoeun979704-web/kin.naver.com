@@ -839,6 +839,17 @@ async def process_tracking_sheet(page, worksheet, run_hour):
         if not url.startswith("http"):
             url = "https://kin.naver.com/qna/detail.naver?" + url
 
+        # answerNo 제거: 네이버는 해당 파라미터가 있으면 그 답변을 최상단으로
+        # 재배열하므로, 기본 순서(채택답변+추천순)를 얻기 위해 제거
+        parsed_url = urlparse(url)
+        params = parse_qs(parsed_url.query)
+        params.pop("answerNo", None)
+        new_query = urlencode(params, doseq=True)
+        url = urlunparse((
+            parsed_url.scheme, parsed_url.netloc, parsed_url.path,
+            "", new_query, "",
+        ))
+
         logger.info(f"[밀착마크] 행{i} 순위 확인 중...")
 
         try:
