@@ -845,7 +845,16 @@ async def process_tracking_sheet(page, worksheet, run_hour):
             # 페이지를 한 번만 로드하고 모든 타겟 답변자를 검색
             answerer_list = await parse_question_page(page, url)
 
+            # 디버깅: 파싱된 모든 답변자 나열
+            logger.info(f"[밀착마크] 행{i} 파싱된 답변자 {len(answerer_list)}명:")
+            for idx, (name, likes, answer_no, career_raw) in enumerate(answerer_list):
+                logger.info(
+                    f"    [{idx+1}위] name={name!r} / 따봉={likes} / "
+                    f"career={career_raw[:80]!r}"
+                )
+
             best_info = None
+            matched_target = None
             for answerer in TARGET_ANSWERERS:
                 rank_info = find_target_in_answers(answerer_list, answerer)
                 if rank_info["rank"] is not None:
@@ -855,9 +864,13 @@ async def process_tracking_sheet(page, worksheet, run_hour):
                             or cur_likes > best_likes
                             or (cur_likes == best_likes and rank_info["rank"] < best_info["rank"])):
                         best_info = rank_info
+                        matched_target = answerer
 
             rank_text = str(best_info["rank"]) if best_info else "없음"
-            logger.info(f"[밀착마크] 행{i} → {rank_text}위 (총 {answerer_list and len(answerer_list) or 0}명 답변)")
+            logger.info(
+                f"[밀착마크] 행{i} → {rank_text}위 "
+                f"(매칭: {matched_target or '없음'}, 총 {len(answerer_list)}명)"
+            )
         except PlaywrightTimeout:
             logger.error(f"[밀착마크] 행{i} 타임아웃")
             rank_text = "타임아웃"
