@@ -705,9 +705,12 @@ async def process_keyword(page, row_number, keyword, search_func=None, top_n=Non
                     rank_info["top1_likes"], rank_info["target_likes"]
                 )
 
-            # URL 정리: 필요한 파라미터만 남기고 answerNo 추가
+            # URL 정리: page.url 사용 (리디렉션 해결된 최종 kin.naver.com URL)
+            # search.naver.com의 링크는 리디렉션을 거치므로 원본 url이 아닌
+            # page가 실제로 도착한 URL을 기준으로 파라미터를 추출
+            resolved_url = page.url if page.url and "kin.naver.com" in page.url else url
             answer_no = rank_info.get("target_answer_no")
-            parsed = urlparse(url)
+            parsed = urlparse(resolved_url)
             params = parse_qs(parsed.query)
             clean_params = {}
             for key in ("d1id", "dirId", "docId"):
