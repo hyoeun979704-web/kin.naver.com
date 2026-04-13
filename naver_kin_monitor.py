@@ -397,8 +397,38 @@ async def search_naver_main_feed(page, keyword):
     await random_delay()
 
     results = []
-    # 페이지 내 지식인 질문 링크를 모두 추출
-    kin_links = await page.query_selector_all("a[href*='kin.naver.com/qna/detail']")
+
+    # 지식인 섹션을 먼저 찾아서 그 안에서만 링크 추출 (사이드바/관련질문 제외)
+    kin_section = None
+    for sel in [
+        "section.sp_nkin",
+        "section.sc_new.sp_nkin",
+        "section[class*='sp_nkin']",
+        "div.api_subject_bx",
+        "section[data-module-name*='kin']",
+    ]:
+        kin_section = await page.query_selector(sel)
+        if kin_section:
+            logger.info(f"지식인 섹션 발견: {sel}")
+            break
+
+    # 섹션 내에서 질문 제목 링크만 우선 추출 (답변 미리보기 링크는 제외)
+    scope = kin_section if kin_section else page
+    kin_links = []
+    for sel in [
+        ".total_tit a[href*='kin.naver.com/qna/detail']",
+        ".question_text a[href*='kin.naver.com/qna/detail']",
+        "a.api_txt_lines[href*='kin.naver.com/qna/detail']",
+        "a.link_tit[href*='kin.naver.com/qna/detail']",
+        "a[href*='kin.naver.com/qna/detail']",
+    ]:
+        kin_links = await scope.query_selector_all(sel)
+        if kin_links:
+            logger.info(f"지식인 링크 선택자: {sel} ({len(kin_links)}개 후보)")
+            break
+
+    if not kin_section:
+        logger.warning("지식인 섹션을 찾지 못함 — 전체 페이지 대상 (순위 부정확 가능)")
 
     seen_urls = set()
     for link_el in kin_links:
@@ -406,9 +436,14 @@ async def search_naver_main_feed(page, keyword):
             break
         try:
             href = await link_el.get_attribute("href")
-            if not href or href in seen_urls:
+            if not href:
                 continue
-            seen_urls.add(href)
+            # docId 기준 중복 제거 (같은 질문이 제목/미리보기에 각각 링크)
+            doc_match = re.search(r'docId=(\d+)', href)
+            doc_id = doc_match.group(1) if doc_match else href
+            if doc_id in seen_urls:
+                continue
+            seen_urls.add(doc_id)
             title = (await link_el.inner_text()).strip()
             if not title:
                 continue
@@ -417,6 +452,7 @@ async def search_naver_main_feed(page, keyword):
                 "url": href,
                 "title": title[:50],
             })
+            logger.info(f"  [통합검색 {len(results)}위] {title[:40]} → {href[:80]}")
         except Exception:
             continue
 
@@ -424,17 +460,41 @@ async def search_naver_main_feed(page, keyword):
     return results
 
 
+def _strip_url_param(url, param_name):
+    """URL에서 특정 쿼리 파라미터를 제거합니다."""
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+    params.pop(param_name, None)
+    return urlunparse((
+        parsed.scheme, parsed.netloc, parsed.path,
+        "", urlencode(params, doseq=True), "",
+    ))
+
+
 async def parse_question_page(page, question_url):
     """질문 페이지에 접속하여 모든 답변자 데이터를 파싱합니다.
 
     페이지를 한 번만 로드하고, '더보기' 버튼이 있으면 클릭하여 전체 답변을 수집합니다.
 
+    answerNo 파라미터가 있으면 네이버가 해당 답변을 최상단으로 재배열하므로,
+    파싱 전에 반드시 제거하여 기본 순서(채택답변+추천순)로 렌더링되도록 합니다.
+
     Returns:
         list[tuple]: [(name, likes, answer_no, career_raw), ...] 순위순
     """
-    logger.info(f"질문 페이지 접속: {question_url}")
-    await page.goto(question_url, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT)
+    # 입력 URL에서 answerNo 제거 (직접 URL 대응)
+    clean_input = _strip_url_param(question_url, "answerNo")
+    logger.info(f"질문 페이지 접속: {clean_input}")
+    await page.goto(clean_input, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT)
     await random_delay()
+
+    # 리디렉션 후 URL에 answerNo가 다시 포함된 경우(search.naver.com 대응) 재접속
+    resolved = page.url
+    if "answerNo" in parse_qs(urlparse(resolved).query):
+        clean_resolved = _strip_url_param(resolved, "answerNo")
+        logger.info(f"리디렉션 URL에 answerNo 포함 → 재접속: {clean_resolved}")
+        await page.goto(clean_resolved, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT)
+        await random_delay()
 
     # ─── '더보기' 버튼 처리 ───
     more_clicked = 0
@@ -842,16 +902,7 @@ async def process_tracking_sheet(page, worksheet, run_hour):
         if not url.startswith("http"):
             url = "https://kin.naver.com/qna/detail.naver?" + url
 
-        # answerNo 제거: 네이버는 해당 파라미터가 있으면 그 답변을 최상단으로
-        # 재배열하므로, 기본 순서(채택답변+추천순)를 얻기 위해 제거
-        parsed_url = urlparse(url)
-        params = parse_qs(parsed_url.query)
-        params.pop("answerNo", None)
-        new_query = urlencode(params, doseq=True)
-        url = urlunparse((
-            parsed_url.scheme, parsed_url.netloc, parsed_url.path,
-            "", new_query, "",
-        ))
+        # answerNo 제거는 parse_question_page에서 자동 처리됨
 
         logger.info(f"[밀착마크] 행{i} 순위 확인 중...")
 
