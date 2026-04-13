@@ -609,7 +609,14 @@ async def parse_question_page(page, question_url):
             seen.add(name)
             unique_data.append((name, likes, answer_no, career_raw))
 
-    logger.info(f"답변 파싱 완료 — 총 {len(unique_data)}명")
+    # 파싱된 모든 답변자 상세 로그 (순위 검증용)
+    logger.info(f"답변 파싱 완료 — 총 {len(unique_data)}명 (중복 제거 전 {len(answerer_data)}명)")
+    for idx, (name, likes, answer_no, career_raw) in enumerate(unique_data):
+        logger.info(
+            f"    [{idx+1}위] name={name!r} 따봉={likes} "
+            f"answerNo={answer_no} career={career_raw[:60]!r}"
+        )
+
     return unique_data
 
 
