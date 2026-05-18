@@ -50,11 +50,6 @@ from config import (
     NEEDED_LIKES_COL_2,
     ACTUAL_LIKES_COL_2,
     KEYWORDS,
-    # 메인페이지 시트
-    MAIN_PAGE_WORKSHEET_INDEX,
-    MAIN_PAGE_KEYWORDS_START_ROW,
-    MAIN_PAGE_TOP_N,
-    MAIN_COL_GROUPS,
     # 아정당 밀착마크 시트
     TRACKING_WORKSHEET_INDEX,
     TRACKING_DATA_START_ROW,
@@ -380,86 +375,6 @@ async def search_naver_kin(page, keyword):
     return results
 
 
-async def search_naver_main_feed(page, keyword):
-    """네이버 통합검색(search.naver.com)에서 지식인 질문 링크를 추출합니다.
-
-    Returns:
-        list[dict]: [{"rank": 1, "url": "...", "title": "..."}, ...]
-    """
-    encoded_keyword = quote_plus(keyword)
-    search_url = (
-        f"https://search.naver.com/search.naver"
-        f"?where=nexearch&query={encoded_keyword}"
-    )
-
-    logger.info(f"통합검색 중: '{keyword}'")
-    await page.goto(search_url, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT)
-    await random_delay()
-
-    results = []
-
-    # 지식인 섹션을 먼저 찾아서 그 안에서만 링크 추출 (사이드바/관련질문 제외)
-    kin_section = None
-    for sel in [
-        "section.sp_nkin",
-        "section.sc_new.sp_nkin",
-        "section[class*='sp_nkin']",
-        "div.api_subject_bx",
-        "section[data-module-name*='kin']",
-    ]:
-        kin_section = await page.query_selector(sel)
-        if kin_section:
-            logger.info(f"지식인 섹션 발견: {sel}")
-            break
-
-    # 섹션 내에서 질문 제목 링크만 우선 추출 (답변 미리보기 링크는 제외)
-    scope = kin_section if kin_section else page
-    kin_links = []
-    for sel in [
-        ".total_tit a[href*='kin.naver.com/qna/detail']",
-        ".question_text a[href*='kin.naver.com/qna/detail']",
-        "a.api_txt_lines[href*='kin.naver.com/qna/detail']",
-        "a.link_tit[href*='kin.naver.com/qna/detail']",
-        "a[href*='kin.naver.com/qna/detail']",
-    ]:
-        kin_links = await scope.query_selector_all(sel)
-        if kin_links:
-            logger.info(f"지식인 링크 선택자: {sel} ({len(kin_links)}개 후보)")
-            break
-
-    if not kin_section:
-        logger.warning("지식인 섹션을 찾지 못함 — 전체 페이지 대상 (순위 부정확 가능)")
-
-    seen_urls = set()
-    for link_el in kin_links:
-        if len(results) >= MAIN_PAGE_TOP_N:
-            break
-        try:
-            href = await link_el.get_attribute("href")
-            if not href:
-                continue
-            # docId 기준 중복 제거 (같은 질문이 제목/미리보기에 각각 링크)
-            doc_match = re.search(r'docId=(\d+)', href)
-            doc_id = doc_match.group(1) if doc_match else href
-            if doc_id in seen_urls:
-                continue
-            seen_urls.add(doc_id)
-            title = (await link_el.inner_text()).strip()
-            if not title:
-                continue
-            results.append({
-                "rank": len(results) + 1,
-                "url": href,
-                "title": title[:50],
-            })
-            logger.info(f"  [통합검색 {len(results)}위] {title[:40]} → {href[:80]}")
-        except Exception:
-            continue
-
-    logger.info(f"'{keyword}' 통합검색 결과 {len(results)}개 지식인 질문 추출")
-    return results
-
-
 def _strip_url_param(url, param_name):
     """URL에서 특정 쿼리 파라미터를 제거합니다."""
     parsed = urlparse(url)
@@ -608,6 +523,10 @@ async def parse_question_page(page, question_url):
         if name not in seen:
             seen.add(name)
             unique_data.append((name, likes, answer_no, career_raw))
+
+    # 따봉 수 기준 내림차순 정렬 (추천순 = 실제 네이버 표시 순위)
+    # DOM 순서는 페이지 정렬 설정/answerNo 등에 따라 달라질 수 있으므로 직접 정렬
+    unique_data.sort(key=lambda x: x[1] if x[1] is not None else -1, reverse=True)
 
     # 파싱된 모든 답변자 상세 로그 (순위 검증용)
     logger.info(f"답변 파싱 완료 — 총 {len(unique_data)}명 (중복 제거 전 {len(answerer_data)}명)")
@@ -914,16 +833,7 @@ async def process_tracking_sheet(page, worksheet, run_hour):
         logger.info(f"[밀착마크] 행{i} 순위 확인 중...")
 
         try:
-            # 페이지를 한 번만 로드하고 모든 타겟 답변자를 검색
             answerer_list = await parse_question_page(page, url)
-
-            # 디버깅: 파싱된 모든 답변자 나열
-            logger.info(f"[밀착마크] 행{i} 파싱된 답변자 {len(answerer_list)}명:")
-            for idx, (name, likes, answer_no, career_raw) in enumerate(answerer_list):
-                logger.info(
-                    f"    [{idx+1}위] name={name!r} / 따봉={likes} / "
-                    f"career={career_raw[:80]!r}"
-                )
 
             best_info = None
             matched_target = None
@@ -963,7 +873,7 @@ async def process_tracking_sheet(page, worksheet, run_hour):
 
 
 async def main():
-    """메인 실행 함수 — 지식인 / 메인페이지 / 아정당 밀착마크 3개 시트를 처리합니다."""
+    """메인 실행 함수 — 지식인 / 아정당 밀착마크 2개 시트를 처리합니다."""
     run_hour = datetime.now(KST).hour
     full_record = run_hour < 13  # 오후 1시 이전: 전체 기록 / 이후: 순위+링크+실제작업만
     now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
@@ -976,15 +886,12 @@ async def main():
     logger.info(f"타겟 답변자: {', '.join(TARGET_ANSWERERS)}")
     logger.info("=" * 60)
 
-    # 1) 구글 스프레드시트 연결 — 3개 시트 모두 가져오기
+    # 1) 구글 스프레드시트 연결 — 2개 시트 가져오기
     try:
         spreadsheet = get_spreadsheet()
         kin_ws = spreadsheet.get_worksheet(WORKSHEET_INDEX)
-        main_ws = spreadsheet.get_worksheet(MAIN_PAGE_WORKSHEET_INDEX)
         track_ws = spreadsheet.get_worksheet(TRACKING_WORKSHEET_INDEX)
-        logger.info(
-            f"시트 로드 완료: {kin_ws.title} / {main_ws.title} / {track_ws.title}"
-        )
+        logger.info(f"시트 로드 완료: {kin_ws.title} / {track_ws.title}")
     except Exception as e:
         logger.error(f"구글 시트 연결 실패: {e}")
         logger.error("credentials.json 파일과 시트 공유 설정을 확인하세요.")
@@ -997,13 +904,8 @@ async def main():
         kin_keywords = [
             (KEYWORDS_START_ROW + i, kw) for i, kw in enumerate(KEYWORDS)
         ]
-    main_keywords = load_keywords_from_sheet(
-        main_ws, start_row=MAIN_PAGE_KEYWORDS_START_ROW
-    )
 
-    logger.info(
-        f"키워드: 지식인 {len(kin_keywords)}개 / 메인페이지 {len(main_keywords)}개"
-    )
+    logger.info(f"키워드: 지식인 {len(kin_keywords)}개")
 
     total_success = 0
     total_fail = 0
@@ -1045,45 +947,27 @@ async def main():
             total_success += s
             total_fail += f
 
-        # 5) 메인페이지 시트 처리 (search.naver.com 통합검색)
-        main_results = []
-        if main_keywords:
-            logger.info(f"\n{'═' * 60}")
-            logger.info("【메인페이지 시트】처리 시작")
-            logger.info(f"{'═' * 60}")
-            main_results, s, f, context, page = await run_keyword_batch(
-                main_keywords, browser, context, page,
-                search_func=search_naver_main_feed, top_n=MAIN_PAGE_TOP_N,
-                label="메인페이지",
-            )
-            total_success += s
-            total_fail += f
-
-        # 6) 아정당 밀착마크 시트 처리 (기존 링크 방문 → 순위 기록)
+        # 5) 아정당 밀착마크 시트 처리 (기존 링크 방문 → 순위 기록)
         await process_tracking_sheet(page, track_ws, run_hour)
 
         await browser.close()
 
-    # 7) 시트별 결과 일괄 기록
+    # 6) 시트별 결과 일괄 기록
     logger.info("\n" + "─" * 40)
     logger.info("탐색 완료 — 중복 검사 및 시트 기록 시작")
     logger.info("─" * 40)
 
     if kin_results:
         flush_to_sheet(kin_ws, kin_results, full_record=full_record)
-    if main_results:
-        flush_to_sheet(main_ws, main_results, col_groups=MAIN_COL_GROUPS,
-                       full_record=full_record)
 
-    # 8) 오전에만 따봉 신청 갯수별 링크를 메모장에 저장
+    # 7) 오전에만 따봉 신청 갯수별 링크를 메모장에 저장
     if full_record:
-        save_links_to_txt(kin_results + main_results)
+        save_links_to_txt(kin_results)
 
-    # 9) 완료 리포트
-    total_keywords = len(kin_keywords) + len(main_keywords)
+    # 8) 완료 리포트
     logger.info("\n" + "=" * 60)
     logger.info("모니터링 완료!")
-    logger.info(f"성공: {total_success} / 실패: {total_fail} / 전체: {total_keywords}")
+    logger.info(f"성공: {total_success} / 실패: {total_fail} / 전체: {len(kin_keywords)}")
     logger.info("=" * 60)
 
 

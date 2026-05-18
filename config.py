@@ -51,20 +51,8 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
 ]
 
-# ─── 메인페이지 시트 설정 (두 번째 탭) ───
-MAIN_PAGE_WORKSHEET_INDEX = 1
-MAIN_PAGE_KEYWORDS_START_ROW = 2  # 데이터 시작 행 (1행은 헤더)
-MAIN_PAGE_TOP_N = 3  # 상위 3개 게시물
-
-# 메인페이지 열 그룹: (순위, 링크, 현재따봉, 요청갯수, 실제작업수량)
-MAIN_COL_GROUPS = [
-    ("B", "C", "E", "F", "H"),   # 1위 게시물
-    ("I", "J", "L", "M", "O"),   # 2위 게시물
-    ("P", "Q", "S", "T", "V"),   # 3위 게시물
-]
-
-# ─── 아정당 밀착마크 시트 설정 (세 번째 탭) ───
-TRACKING_WORKSHEET_INDEX = 2
+# ─── 아정당 밀착마크 시트 설정 (두 번째 탭) ───
+TRACKING_WORKSHEET_INDEX = 1
 TRACKING_DATA_START_ROW = 3  # 데이터 시작 행 (1~2행은 헤더)
 TRACKING_LINK_COL = "C"      # 답변 링크 열
 TRACKING_DATE_COL = "D"      # 확인 날짜 열

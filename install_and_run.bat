@@ -93,7 +93,7 @@ if not exist "credentials.json" (
 echo.
 echo ============================================
 echo   [OK] Setup complete! Starting scheduler...
-echo   Runs immediately, then at 09:00 / 14:00 KST
+echo   Runs immediately, then at 09:00 / 12:00 / 15:00 / 17:00 KST
 echo ============================================
 echo.
 
