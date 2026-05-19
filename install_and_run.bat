@@ -56,10 +56,10 @@ call venv\Scripts\activate.bat
 echo.
 echo [3/4] Installing packages...
 
-pip show playwright >nul 2>&1
+python -m pip show playwright >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
     echo    Installing packages... (may take a few minutes)
-    pip install -r requirements.txt --quiet
+    python -m pip install -r requirements.txt --quiet
     if %ERRORLEVEL% NEQ 0 (
         echo [ERROR] Package install failed
         pause
@@ -68,7 +68,7 @@ if %ERRORLEVEL% NEQ 0 (
     echo    [OK] Python packages installed
 
     echo    Installing Playwright browser... (may take a few minutes)
-    playwright install chromium
+    python -m playwright install chromium
     if %ERRORLEVEL% NEQ 0 (
         echo [ERROR] Playwright browser install failed
         pause
